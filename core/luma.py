@@ -497,13 +497,16 @@ class Luma(commands.Cog):
                     event_dicts.append(event_dict)
 
                 if check_for_changes:
-                    # Use database to track changes
                     change_stats = await self.event_db.upsert_events(
                         event_dicts, subscription.api_id
                     )
-                    new_events = await self.event_db.get_new_events(
-                        subscription.api_id, event_dicts
-                    )
+
+                    new_event_dicts = change_stats.get("new_event_data", [])
+                    new_events = [
+                        event
+                        for event in events
+                        if event.api_id in {e["api_id"] for e in new_event_dicts}
+                    ]
 
                     log.info(
                         f"Successfully fetched {len(events)} events from subscription {subscription.name}. "
@@ -2108,94 +2111,92 @@ class Luma(commands.Cog):
             # Step 3: Sort events by start time
             all_db_events.sort(key=lambda x: x["start_at"])
 
-            # Limit to recent events (next 30 days)
-            cutoff_date = datetime.now(timezone.utc) + timedelta(days=30)
-            recent_events = [
+            # Filter out past events and limit to next 30 days
+            now = datetime.now(timezone.utc)
+            cutoff_date = now + timedelta(days=30)
+            upcoming_events = [
                 event
                 for event in all_db_events
-                if datetime.fromisoformat(event["start_at"].replace("Z", "+00:00"))
-                <= cutoff_date
+                if now <= datetime.fromisoformat(event["start_at"].replace("Z", "+00:00")) <= cutoff_date
             ]
 
-            if not recent_events:
-                embed.description = "No events in the next 30 days."
+            if not upcoming_events:
+                embed.description = "No upcoming events in the next 30 days."
                 await ctx.send(embed=embed)
                 return
 
-            # Step 4: Display events from database (now consistent with database state)
-            for event in recent_events[:10]:  # Limit to 10 events per message
-                try:
-                    start_time = datetime.fromisoformat(
-                        event["start_at"].replace("Z", "+00:00")
-                    )
-                    end_time = (
-                        datetime.fromisoformat(event["end_at"].replace("Z", "+00:00"))
-                        if event["end_at"]
-                        else None
-                    )
+            # Step 4: Paginate events (10 events per page/message)
+            events_per_page = 10
+            total_pages = (len(upcoming_events) + events_per_page - 1) // events_per_page
 
-                    # Format date nicely
-                    date_str = start_time.strftime("%A, %B %d, %Y")
+            for page_num in range(total_pages):
+                start_idx = page_num * events_per_page
+                end_idx = start_idx + events_per_page
+                page_events = upcoming_events[start_idx:end_idx]
 
-                    # Use the new local time formatting
-                    local_time_str = format_local_time(
-                        event["start_at"],
-                        event["timezone"] or "UTC",
-                        include_end_time=bool(event["end_at"]),
-                        end_time_str=event["end_at"],
+                if page_num == 0:
+                    page_embed = embed
+                else:
+                    page_embed = discord.Embed(
+                        title=f"📅 Upcoming Events (page {page_num + 1}/{total_pages})",
+                        color=discord.Color.blue(),
+                        timestamp=datetime.now(timezone.utc),
                     )
 
-                    # Create event title with clickable subscription link
-                    event_title = f"**{event['name']}**"
+                for event in page_events:
+                    try:
+                        start_time = datetime.fromisoformat(
+                            event["start_at"].replace("Z", "+00:00")
+                        )
+                        end_time = (
+                            datetime.fromisoformat(event["end_at"].replace("Z", "+00:00"))
+                            if event["end_at"]
+                            else None
+                        )
 
-                    # Find the subscription to get its slug for the link
-                    subscription_obj = None
-                    for sub_id, sub_data in subscriptions.items():
-                        sub = Subscription.from_dict(sub_data)
-                        if sub.api_id == event["calendar_api_id"]:
-                            subscription_obj = sub
-                            break
+                        date_str = start_time.strftime("%A, %B %d, %Y")
 
-                    if subscription_obj and subscription_obj.slug:
-                        # Build URL first, then format for Discord using angle brackets
-                        subscription_url = f"https://lu.ma/{subscription_obj.slug}"
-                        event_title += f"\n*from* [{event['subscription_name']}](<{subscription_url}>)"
-                    elif subscription_obj:
-                        # Subscription exists but no slug
-                        event_title += f"\n*from {event['subscription_name']}*"
-                    else:
-                        # Fallback if subscription not found
-                        event_title += f"\n*from {event['subscription_name']}*"
+                        local_time_str = format_local_time(
+                            event["start_at"],
+                            event["timezone"] or "UTC",
+                            include_end_time=bool(event["end_at"]),
+                            end_time_str=event["end_at"],
+                        )
 
-                    # Event details
-                    details = f"📅 {date_str}\n🕐 Local Time: {local_time_str}"
+                        event_title = f"**{event['name']}**"
 
-                    # if event["event_type"]:
-                    #     details += f"\n📋 Type: {event['event_type'].title()}"
+                        subscription_obj = None
+                        for sub_id, sub_data in subscriptions.items():
+                            sub = Subscription.from_dict(sub_data)
+                            if sub.api_id == event["calendar_api_id"]:
+                                subscription_obj = sub
+                                break
 
-                    # Build event URL first, then format with angle brackets for reliability
-                    if event["url"]:
-                        event_url = f"https://lu.ma/{event['url']}"
-                        details += f"\n🔗 [View Event](<{event_url}>)"
+                        if subscription_obj and subscription_obj.slug:
+                            subscription_url = f"https://lu.ma/{subscription_obj.slug}"
+                            event_title += f"\n*from* [{event['subscription_name']}](<{subscription_url}>)"
+                        elif subscription_obj:
+                            event_title += f"\n*from {event['subscription_name']}*"
+                        else:
+                            event_title += f"\n*from {event['subscription_name']}*"
 
-                    embed.add_field(
-                        name=event_title,
-                        value=details,
-                        inline=False,
-                    )
+                        details = f"📅 {date_str}\n🕐 Local Time: {local_time_str}"
 
-                except Exception as e:
-                    log.warning(f"Error formatting event {event['name']}: {e}")
-                    continue
+                        if event["url"]:
+                            event_url = f"https://lu.ma/{event['url']}"
+                            details += f"\n🔗 [View Event](<{event_url}>)"
 
-            if len(recent_events) > 10:
-                embed.add_field(
-                    name="And more...",
-                    value=f"{len(recent_events) - 10} more events available",
-                    inline=False,
-                )
+                        page_embed.add_field(
+                            name=event_title,
+                            value=details,
+                            inline=False,
+                        )
 
-            await ctx.send(embed=embed)
+                    except Exception as e:
+                        log.warning(f"Error formatting event {event['name']}: {e}")
+                        continue
+
+                await ctx.send(embed=page_embed)
 
         except Exception as e:
             log.error(f"Error in events command: {e}")

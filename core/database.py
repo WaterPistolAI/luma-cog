@@ -183,14 +183,14 @@ class EventDatabase:
         Update or insert events and return information about changes.
 
         Returns:
-            Dict with 'new_events', 'updated_events', 'deleted_events' counts
+            Dict with 'new_events', 'updated_events', 'deleted_events' counts,
+            and 'new_event_data' list containing the actual new event data
         """
         async with self._lock:
             try:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
 
-                    # Get existing events for this calendar
                     cursor.execute(
                         """
                         SELECT event_api_id, last_modified FROM events
@@ -200,16 +200,15 @@ class EventDatabase:
                     )
                     existing_events = {row[0]: row[1] for row in cursor.fetchall()}
 
-                    new_events = 0
+                    new_events_count = 0
                     updated_events = 0
+                    new_event_data = []
                     current_time = datetime.now(timezone.utc).isoformat()
 
-                    # Process incoming events using UPSERT to handle duplicates
                     for event_data in events:
                         event_api_id = event_data["api_id"]
 
                         try:
-                            # Use UPSERT (INSERT OR REPLACE) to handle duplicates
                             cursor.execute(
                                 """
                                 INSERT OR REPLACE INTO events (
@@ -232,23 +231,21 @@ class EventDatabase:
                                 ),
                             )
 
-                            # Check if this was a new event or update
                             if event_api_id in existing_events:
                                 updated_events += 1
                             else:
-                                new_events += 1
+                                new_events_count += 1
+                                new_event_data.append(event_data)
 
                         except Exception as e:
                             log.warning(f"Failed to upsert event {event_api_id}: {e}")
                             continue
 
-                    # Find deleted events (events that existed before but not in current data)
                     current_event_ids = {event["api_id"] for event in events}
                     deleted_events = len(existing_events) - len(
                         current_event_ids.intersection(existing_events.keys())
                     )
 
-                    # Clean up deleted events
                     if deleted_events > 0:
                         deleted_event_ids = list(
                             set(existing_events.keys()) - current_event_ids
@@ -265,14 +262,15 @@ class EventDatabase:
                     conn.commit()
 
                     log.info(
-                        f"Event sync for {calendar_api_id}: {new_events} new, {updated_events} updated, {deleted_events} deleted"
+                        f"Event sync for {calendar_api_id}: {new_events_count} new, {updated_events} updated, {deleted_events} deleted"
                     )
 
                     return {
-                        "new_events": new_events,
+                        "new_events": new_events_count,
                         "updated_events": updated_events,
                         "deleted_events": deleted_events,
                         "total_events": len(events),
+                        "new_event_data": new_event_data,
                     }
 
             except Exception as e:
@@ -282,6 +280,7 @@ class EventDatabase:
                     "updated_events": 0,
                     "deleted_events": 0,
                     "total_events": 0,
+                    "new_event_data": [],
                 }
 
     async def get_new_events(
