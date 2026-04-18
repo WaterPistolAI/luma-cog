@@ -1,6 +1,8 @@
 import sys
+import os
 import asyncio
 import logging
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Union
 import discord
@@ -165,13 +167,18 @@ class Luma(commands.Cog):
         self.event_db = EventDatabase(cog_instance=self)
 
         # Default configuration - global settings
-        self.config.register_global(update_interval_hours=24, last_update=None)
+        self.config.register_global(
+            update_interval_hours=24,
+            last_update=None,
+            google_credentials=None,
+        )
 
         # Default guild configuration
         default_guild = {
             "subscriptions": {},
             "channel_groups": {},
             "enabled": True,
+            "aggregate_calendar": None,
         }
 
         self.config.register_guild(**default_guild)
@@ -716,6 +723,7 @@ class Luma(commands.Cog):
             embed.add_field(
                 name="Commands",
                 value="• `subscriptions` - Manage subscriptions\n"
+                "• `aggregate` - Aggregate calendar settings\n"
                 "• `groups` - Manage channel groups\n"
                 "• `events` - Display upcoming events\n"
                 "• `schedule` - View update timing and schedule\n"
@@ -814,13 +822,46 @@ class Luma(commands.Cog):
                 subscriptions[api_id] = subscription.to_dict()
                 await self.config.guild(ctx.guild).subscriptions.set(subscriptions)
 
-                # Update embed with success message
+                ics_url = f"https://api2.luma.com/ics/get?entity=calendar&id={api_id}"
+                google_url = f"https://www.google.com/calendar/render?cid={urllib.parse.quote(ics_url, safe='')}"
+
                 embed.title = "✅ Subscription Added"
                 embed.description = f"Successfully added subscription: **{name}**"
                 embed.color = discord.Color.green()
                 embed.add_field(name="API ID", value=f"`{api_id}`", inline=True)
                 embed.add_field(name="Slug", value=f"`{slug}`", inline=True)
                 embed.add_field(name="Name", value=f"`{name}`", inline=True)
+                embed.add_field(
+                    name="📅 Calendar Links",
+                    value=f"**ICS:** `{ics_url}`\n[Add to Google Calendar]({google_url})",
+                    inline=False,
+                )
+
+                # Auto-sync to aggregate Google Calendar if configured
+                creds = await self.config.google_credentials()
+                aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
+                
+                if creds and aggregate_config:
+                    try:
+                        from .google_calendar import GoogleCalendarClient
+                        client = GoogleCalendarClient(creds)
+                        sync_result = await client.add_calendar_to_list(ics_url, name)
+                        
+                        if sync_result.get('success'):
+                            if sync_result.get('already_exists'):
+                                sync_status = "🔁 Already synced to aggregate calendar"
+                            else:
+                                sync_status = "✅ Auto-synced to aggregate calendar"
+                            embed.add_field(
+                                name="Google Calendar",
+                                value=sync_status,
+                                inline=False,
+                            )
+                            log.info(f"Auto-synced subscription '{name}' to aggregate calendar")
+                        else:
+                            log.warning(f"Failed to auto-sync to Google Calendar: {sync_result.get('error')}")
+                    except Exception as e:
+                        log.warning(f"Error auto-syncing to Google Calendar: {e}")
 
                 await message.edit(embed=embed)
 
@@ -879,6 +920,468 @@ class Luma(commands.Cog):
             title="Subscription Removed",
             description=f"Successfully removed subscription: **{subscription.name}**",
             color=discord.Color.red(),
+        )
+        await ctx.send(embed=embed)
+
+    @subscriptions_group.command(name="links", aliases=["calendar", "cal"])
+    async def subscription_links(self, ctx: commands.Context):
+        """Get calendar subscribe links for all subscriptions.
+
+        Shows ICS feed URLs and Google Calendar subscribe links for each
+        configured subscription. Use these to add calendars to your preferred
+        calendar application.
+
+        Example:
+        `[p]luma subscriptions links`
+        """
+        subscriptions = await self.config.guild(ctx.guild).subscriptions()
+
+        if not subscriptions:
+            await ctx.send(
+                "No subscriptions configured. Use `[p]luma subscriptions add` to add one."
+            )
+            return
+
+        embed = discord.Embed(
+            title="📅 Calendar Subscribe Links",
+            description="Use these links to add calendars to your calendar app:",
+            color=discord.Color.blue(),
+        )
+        for sub_id, sub_data in subscriptions.items():
+            subscription = Subscription.from_dict(sub_data)
+            api_id = subscription.api_id
+
+            ics_url = f"https://api2.luma.com/ics/get?entity=calendar&id={api_id}"
+            google_url = f"https://www.google.com/calendar/render?cid={urllib.parse.quote(ics_url, safe='')}"
+
+            embed.add_field(
+                name=subscription.name,
+                value=f"**ICS Feed:**\n`{ics_url}`\n\n[Add to Google Calendar]({google_url})",
+                inline=False,
+            )
+
+        embed.set_footer(text="ICS feeds update automatically when events change")
+        await ctx.send(embed=embed)
+
+    @luma_group.group(name="aggregate", aliases=["agg"])
+    async def aggregate_group(self, ctx: commands.Context):
+        """Manage the aggregate Google Calendar.
+
+        The aggregate calendar combines all your Luma subscriptions into one
+        Google Calendar for easy viewing.
+
+        Setup:
+        1. Create a Google Calendar (or use existing)
+        2. Get the Calendar ID from settings (looks like: xxx@group.calendar.google.com)
+        3. Run `[p]luma aggregate setup <calendar_id>`
+        4. Share the calendar with the bot's service account (if using service account auth)
+
+        Example:
+        - `[p]luma aggregate setup abc123@group.calendar.google.com`
+        - `[p]luma aggregate link` - Get the view link
+        """
+        if ctx.invoked_subcommand is None:
+            aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
+
+            embed = discord.Embed(
+                title="📅 Aggregate Calendar",
+                color=discord.Color.blue(),
+            )
+
+            if aggregate_config:
+                cal_id = aggregate_config.get("calendar_id")
+                embed.description = f"Aggregate calendar is configured."
+                embed.add_field(
+                    name="Calendar ID",
+                    value=f"`{cal_id}`",
+                    inline=False,
+                )
+                embed.add_field(
+                    name="View Calendar",
+                    value=f"[Open in Google Calendar](https://calendar.google.com/calendar?cid={cal_id.replace('@', '%40')})",
+                    inline=False,
+                )
+                embed.add_field(
+                    name="Manage",
+                    value="• `[p]luma aggregate link` - Get shareable link\n"
+                    "• `[p]luma aggregate sync` - Sync all subscriptions\n"
+                    "• `[p]luma aggregate clear` - Clear configuration",
+                    inline=False,
+                )
+            else:
+                embed.description = "No aggregate calendar configured."
+                embed.add_field(
+                    name="Setup",
+                    value="Use `[p]luma aggregate setup <calendar_id>` to configure.\n"
+                    "Example: `[p]luma aggregate setup abc123@group.calendar.google.com`",
+                    inline=False,
+                )
+
+            await ctx.send(embed=embed)
+
+    @aggregate_group.command(name="setup")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def aggregate_setup(self, ctx: commands.Context, calendar_id: str):
+        """Set up the aggregate Google Calendar.
+
+        Parameters:
+        - calendar_id: The Google Calendar ID (e.g., abc123@group.calendar.google.com)
+
+        Find your Google Calendar ID:
+        1. Go to Google Calendar settings
+        2. Click on your calendar
+        3. Find "Integrate calendar" section
+        4. Copy the "Calendar ID"
+
+        Example:
+        `[p]luma aggregate setup abc123@group.calendar.google.com`
+        """
+        existing = await self.config.guild(ctx.guild).aggregate_calendar()
+        aggregate_config = {
+            "calendar_id": calendar_id,
+            "setup_by": ctx.author.id,
+            "setup_at": datetime.now(timezone.utc).isoformat(),
+            "synced_subscriptions": existing.get("synced_subscriptions", []) if existing else [],
+        }
+
+        await self.config.guild(ctx.guild).aggregate_calendar.set(aggregate_config)
+
+        embed = discord.Embed(
+            title="✅ Aggregate Calendar Configured",
+            color=discord.Color.green(),
+        )
+        embed.add_field(
+            name="Calendar ID",
+            value=f"`{calendar_id}`",
+            inline=False,
+        )
+        embed.add_field(
+            name="View Calendar",
+            value=f"[Open in Google Calendar](https://calendar.google.com/calendar?cid={calendar_id.replace('@', '%40')})",
+            inline=False,
+        )
+        embed.add_field(
+            name="Next Steps",
+            value="1. Add subscriptions with `[p]luma subscriptions add <api_id>`\n"
+            "2. Each subscription's ICS feed will be added to this calendar\n"
+            "3. Use `[p]luma aggregate link` to get the shareable link",
+            inline=False,
+        )
+
+        await ctx.send(embed=embed)
+
+    @aggregate_group.command(name="link", aliases=["url", "view"])
+    async def aggregate_link(self, ctx: commands.Context):
+        """Get the link to view the aggregate calendar.
+
+        Shows both the Google Calendar view link and embed code if you want
+        to display the calendar on a website.
+        """
+        aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
+
+        if not aggregate_config:
+            await ctx.send(
+                "No aggregate calendar configured. Use `[p]luma aggregate setup <calendar_id>` first."
+            )
+            return
+
+        cal_id = aggregate_config.get("calendar_id")
+        subscriptions = await self.config.guild(ctx.guild).subscriptions()
+
+        embed = discord.Embed(
+            title="📅 Aggregate Calendar Link",
+            color=discord.Color.blue(),
+        )
+
+        embed.add_field(
+            name="View in Google Calendar",
+            value=f"[Open Calendar](https://calendar.google.com/calendar?cid={cal_id.replace('@', '%40')})",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Public Link (if calendar is public)",
+            value=f"https://calendar.google.com/calendar/embed?src={cal_id}",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Synced Subscriptions",
+            value=f"{len(subscriptions)} calendars added",
+            inline=True,
+        )
+
+        embed.set_footer(text="Make sure your Google Calendar is shared publicly for the public link to work")
+
+        await ctx.send(embed=embed)
+
+    @aggregate_group.command(name="credentials", aliases=["creds"])
+    @checks.is_owner()
+    async def aggregate_credentials(self, ctx: commands.Context, credentials_path: str = None):
+        """Configure Google Calendar API credentials.
+
+        This is a bot owner only command. Credentials are stored globally.
+
+        Setup:
+        1. Go to console.cloud.google.com
+        2. Create a Service Account with Google Calendar API enabled
+        3. Download the JSON credentials file
+        4. Run this command with the file path
+
+        Parameters:
+        - credentials_path: Path to the credentials JSON file
+
+        Example:
+        `[p]luma aggregate credentials /path/to/credentials.json`
+
+        Or set environment variable:
+        `GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json`
+        """
+        import os
+        import json
+
+        if credentials_path:
+            if not os.path.exists(credentials_path):
+                await ctx.send(f"❌ File not found: `{credentials_path}`")
+                return
+
+            try:
+                with open(credentials_path, 'r') as f:
+                    creds_data = json.load(f)
+
+                required_fields = ['type', 'project_id', 'private_key', 'client_email']
+                missing = [f for f in required_fields if f not in creds_data]
+                if missing:
+                    await ctx.send(f"❌ Invalid credentials file. Missing fields: {', '.join(missing)}")
+                    return
+
+                await self.config.google_credentials.set(creds_data)
+
+                embed = discord.Embed(
+                    title="✅ Google Credentials Configured",
+                    color=discord.Color.green(),
+                )
+                embed.add_field(
+                    name="Service Account",
+                    value=f"`{creds_data['client_email']}`",
+                    inline=False,
+                )
+                embed.add_field(
+                    name="Project ID",
+                    value=f"`{creds_data['project_id']}`",
+                    inline=True,
+                )
+                embed.add_field(
+                    name="Next Step",
+                    value=f"Share your Google Calendar with:\n`{creds_data['client_email']}`\n\nGive it 'Make changes to events' permission.",
+                    inline=False,
+                )
+
+                await ctx.send(embed=embed)
+                log.info(f"Google credentials configured by bot owner {ctx.author.id}")
+
+            except json.JSONDecodeError:
+                await ctx.send("❌ Invalid JSON file. Please check the file format.")
+            except Exception as e:
+                log.error(f"Error loading credentials: {e}")
+                await ctx.send(f"❌ Error loading credentials: {str(e)}")
+
+        else:
+            creds = await self.config.google_credentials()
+            if creds:
+                embed = discord.Embed(
+                    title="Google Credentials Status",
+                    color=discord.Color.blue(),
+                )
+                embed.add_field(
+                    name="Service Account",
+                    value=f"`{creds.get('client_email', 'Unknown')}`",
+                    inline=False,
+                )
+                embed.add_field(
+                    name="Project ID",
+                    value=f"`{creds.get('project_id', 'Unknown')}`",
+                    inline=True,
+                )
+                embed.add_field(
+                    name="Status",
+                    value="✅ Configured",
+                    inline=True,
+                )
+                await ctx.send(embed=embed)
+            else:
+                env_creds = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+                if env_creds:
+                    await ctx.send(
+                        f"📋 Using credentials from environment variable:\n`GOOGLE_APPLICATION_CREDENTIALS={env_creds}`\n\n"
+                        f"Or use `{ctx.prefix}luma aggregate credentials <path>` to configure directly."
+                    )
+                else:
+                    await ctx.send(
+                        "❌ No Google credentials configured.\n\n"
+                        f"Usage: `{ctx.prefix}luma aggregate credentials /path/to/credentials.json`\n\n"
+                        "Or set environment variable:\n"
+                        "`GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json`"
+                    )
+
+    @aggregate_group.command(name="sync")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def aggregate_sync(self, ctx: commands.Context):
+        """Sync all subscriptions to the aggregate Google Calendar.
+
+        This adds each subscription's ICS feed to your Google Calendar
+        so all events appear in one place.
+
+        Requirements:
+        - Google credentials configured (`[p]luma aggregate credentials`)
+        - Aggregate calendar set up (`[p]luma aggregate setup`)
+        - Service account has access to your Google Calendar
+        """
+        from .google_calendar import GoogleCalendarClient
+
+        creds = await self.config.google_credentials()
+        if not creds:
+            env_creds = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+            if not env_creds:
+                await ctx.send(
+                    "❌ Google credentials not configured.\n"
+                    f"Use `{ctx.prefix}luma aggregate credentials <path>` first."
+                )
+                return
+
+        aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
+        if not aggregate_config:
+            await ctx.send(
+                "❌ No aggregate calendar configured.\n"
+                f"Use `{ctx.prefix}luma aggregate setup <calendar_id>` first."
+            )
+            return
+
+        subscriptions = await self.config.guild(ctx.guild).subscriptions()
+        if not subscriptions:
+            await ctx.send("❌ No subscriptions to sync. Add some with `[p]luma subscriptions add`")
+            return
+
+        status_msg = await ctx.send("🔄 Syncing subscriptions to Google Calendar...")
+
+        try:
+            client = GoogleCalendarClient(creds)
+
+            test_result = await client.test_connection()
+            if not test_result.get('success'):
+                await status_msg.edit(content=f"❌ Google Calendar connection failed: {test_result.get('error')}")
+                return
+
+            results = []
+            for sub_id, sub_data in subscriptions.items():
+                subscription = Subscription.from_dict(sub_data)
+                ics_url = f"https://api2.luma.com/ics/get?entity=calendar&id={subscription.api_id}"
+
+                result = await client.add_calendar_to_list(ics_url, subscription.name)
+                results.append({
+                    'name': subscription.name,
+                    'success': result.get('success'),
+                    'already_exists': result.get('already_exists', False),
+                    'error': result.get('error'),
+                })
+
+            success_count = sum(1 for r in results if r['success'])
+            existing_count = sum(1 for r in results if r.get('already_exists'))
+            failed = [r for r in results if not r['success']]
+
+            embed = discord.Embed(
+                title="📅 Sync Complete",
+                color=discord.Color.green() if not failed else discord.Color.orange(),
+            )
+
+            embed.add_field(
+                name="Results",
+                value=f"✅ {success_count} synced\n🔁 {existing_count} already existed\n❌ {len(failed)} failed",
+                inline=False,
+            )
+
+            cal_id = aggregate_config.get('calendar_id')
+            embed.add_field(
+                name="View Calendar",
+                value=f"[Open in Google Calendar](https://calendar.google.com/calendar?cid={cal_id.replace('@', '%40')})",
+                inline=False,
+            )
+
+            if failed:
+                failed_list = "\n".join([f"• {r['name']}: {r.get('error', 'Unknown error')}" for r in failed[:5]])
+                embed.add_field(name="Failed", value=failed_list, inline=False)
+
+            await status_msg.edit(content=None, embed=embed)
+
+        except ImportError as e:
+            await status_msg.edit(content=f"❌ Missing dependencies: {str(e)}\nRun: `pip install google-api-python-client google-auth`")
+        except Exception as e:
+            log.error(f"Error syncing to Google Calendar: {e}")
+            await status_msg.edit(content=f"❌ Error: {str(e)}")
+
+    @aggregate_group.command(name="test")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def aggregate_test(self, ctx: commands.Context):
+        """Test Google Calendar API connection."""
+        import os
+        from .google_calendar import GoogleCalendarClient
+
+        creds = await self.config.google_credentials()
+
+        if not creds:
+            env_creds = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+            if not env_creds:
+                await ctx.send(
+                    "❌ No credentials configured.\n"
+                    f"Use `{ctx.prefix}luma aggregate credentials <path>`"
+                )
+                return
+
+        try:
+            client = GoogleCalendarClient(creds)
+            result = await client.test_connection()
+
+            if result.get('success'):
+                embed = discord.Embed(
+                    title="✅ Google Calendar Connection OK",
+                    color=discord.Color.green(),
+                )
+                embed.add_field(
+                    name="Service Account",
+                    value=f"`{result.get('service_account', 'Unknown')}`",
+                    inline=False,
+                )
+
+                calendars = await client.list_calendars()
+                embed.add_field(
+                    name="Calendars Accessible",
+                    value=f"{len(calendars)} calendars",
+                    inline=True,
+                )
+
+                await ctx.send(embed=embed)
+            else:
+                await ctx.send(f"❌ Connection failed: {result.get('error')}")
+
+        except ImportError as e:
+            await ctx.send(f"❌ Missing dependencies: {str(e)}\nRun: `pip install google-api-python-client google-auth`")
+        except Exception as e:
+            await ctx.send(f"❌ Error: {str(e)}")
+
+    @aggregate_group.command(name="clear", aliases=["reset", "delete"])
+    @checks.admin_or_permissions(manage_guild=True)
+    async def aggregate_clear(self, ctx: commands.Context):
+        """Clear the aggregate calendar configuration.
+
+        This only removes the configuration from the bot. It does not
+        remove any calendars or events from Google Calendar.
+        """
+        await self.config.guild(ctx.guild).aggregate_calendar.set(None)
+
+        embed = discord.Embed(
+            title="Aggregate Calendar Cleared",
+            description="The aggregate calendar configuration has been removed.\nNote: Any calendars added to Google Calendar remain there.",
+            color=discord.Color.orange(),
         )
         await ctx.send(embed=embed)
 
