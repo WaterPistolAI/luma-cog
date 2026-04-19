@@ -246,6 +246,7 @@ class Luma(commands.Cog):
             "channel_groups": {},
             "enabled": True,
             "aggregate_calendar": None,
+            "google_event_mapping": {},
         }
 
         self.config.register_guild(**default_guild)
@@ -923,21 +924,41 @@ class Luma(commands.Cog):
                     try:
                         from .google_calendar import GoogleCalendarClient
                         client = GoogleCalendarClient(creds)
-                        sync_result = await client.add_calendar_to_list(ics_url, name)
-                        
-                        if sync_result.get('success'):
-                            if sync_result.get('already_exists'):
-                                sync_status = "🔁 Already synced to aggregate calendar"
-                            else:
-                                sync_status = "✅ Auto-synced to aggregate calendar"
+                        cal_id = aggregate_config.get('calendar_id')
+
+                        async with LumaAPIClient() as api_client:
+                            new_events = await api_client.get_calendar_events(
+                                calendar_identifier=api_id, limit=50,
+                            )
+
+                        now = datetime.now(timezone.utc)
+                        upcoming = [
+                            e for e in new_events
+                            if datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
+                        ]
+
+                        if upcoming:
+                            existing_mapping = await self.config.guild(ctx.guild).google_event_mapping()
+                            sync_result = await client.sync_events(
+                                calendar_id=cal_id,
+                                events=upcoming,
+                                existing_mapping=existing_mapping,
+                            )
+                            await self.config.guild(ctx.guild).google_event_mapping.set(sync_result['mapping'])
+
+                            stats = sync_result['stats']
                             embed.add_field(
                                 name="Google Calendar",
-                                value=sync_status,
+                                value=f"✅ Synced {stats['created']} new events\n🔁 Updated {stats['updated']} existing",
                                 inline=False,
                             )
-                            log.info(f"Auto-synced subscription '{name}' to aggregate calendar")
+                            log.info(f"Auto-synced {stats['created']} events from '{name}' to aggregate calendar")
                         else:
-                            log.warning(f"Failed to auto-sync to Google Calendar: {sync_result.get('error')}")
+                            embed.add_field(
+                                name="Google Calendar",
+                                value="📋 No upcoming events to sync",
+                                inline=False,
+                            )
                     except Exception as e:
                         log.warning(f"Error auto-syncing to Google Calendar: {e}")
 
@@ -1199,6 +1220,7 @@ class Luma(commands.Cog):
         """Configure Google Calendar API credentials.
 
         This is a bot owner only command. Credentials are stored globally.
+        Running with a new path will replace existing credentials.
 
         Setup:
         1. Go to console.cloud.google.com
@@ -1207,16 +1229,20 @@ class Luma(commands.Cog):
         4. Run this command with the file path
 
         Parameters:
-        - credentials_path: Path to the credentials JSON file
+        - credentials_path: Path to the credentials JSON file, or "clear" to remove
 
         Example:
         `[p]luma aggregate credentials /path/to/credentials.json`
-
-        Or set environment variable:
-        `GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json`
+        `[p]luma aggregate credentials clear`
         """
         import os
         import json
+
+        if credentials_path and credentials_path.lower() == "clear":
+            await self.config.google_credentials.clear()
+            await ctx.send("✅ Google credentials removed.")
+            log.info(f"Google credentials cleared by bot owner {ctx.author.id}")
+            return
 
         if credentials_path:
             if not os.path.exists(credentials_path):
@@ -1237,6 +1263,7 @@ class Luma(commands.Cog):
 
                 embed = discord.Embed(
                     title="✅ Google Credentials Configured",
+                    description="Run `[p]luma aggregate test` to verify the connection.",
                     color=discord.Color.green(),
                 )
                 embed.add_field(
@@ -1251,7 +1278,7 @@ class Luma(commands.Cog):
                 )
                 embed.add_field(
                     name="Next Step",
-                    value=f"Share your Google Calendar with:\n`{creds_data['client_email']}`\n\nGive it 'Make changes to events' permission.",
+                    value=f"1. Share your Google Calendar with:\n`{creds_data['client_email']}`\n\n2. Give it 'Make changes to events' permission\n\n3. Run `[p]luma aggregate test` to verify",
                     inline=False,
                 )
 
@@ -1286,6 +1313,13 @@ class Luma(commands.Cog):
                     value="✅ Configured",
                     inline=True,
                 )
+                embed.add_field(
+                    name="Manage",
+                    value=f"• Replace: `{ctx.prefix}luma aggregate credentials <new_path>`\n"
+                          f"• Remove: `{ctx.prefix}luma aggregate credentials clear`\n"
+                          f"• Test: `{ctx.prefix}luma aggregate test`",
+                    inline=False,
+                )
                 await ctx.send(embed=embed)
             else:
                 env_creds = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
@@ -1307,8 +1341,8 @@ class Luma(commands.Cog):
     async def aggregate_sync(self, ctx: commands.Context):
         """Sync all subscriptions to the aggregate Google Calendar.
 
-        This adds each subscription's ICS feed to your Google Calendar
-        so all events appear in one place.
+        Fetches events from all Luma subscriptions and creates/updates
+        them in the aggregate Google Calendar.
 
         Requirements:
         - Google credentials configured (`[p]luma aggregate credentials`)
@@ -1340,7 +1374,7 @@ class Luma(commands.Cog):
             await ctx.send("❌ No subscriptions to sync. Add some with `[p]luma subscriptions add`")
             return
 
-        status_msg = await ctx.send("🔄 Syncing subscriptions to Google Calendar...")
+        status_msg = await ctx.send("🔄 Syncing events to Google Calendar...")
 
         try:
             client = GoogleCalendarClient(creds)
@@ -1350,44 +1384,73 @@ class Luma(commands.Cog):
                 await status_msg.edit(content=f"❌ Google Calendar connection failed: {test_result.get('error')}")
                 return
 
-            results = []
-            for sub_id, sub_data in subscriptions.items():
-                subscription = Subscription.from_dict(sub_data)
-                ics_url = f"https://api2.luma.com/ics/get?entity=calendar&id={subscription.api_id}"
+            cal_id = aggregate_config.get('calendar_id')
+            existing_mapping = await self.config.guild(ctx.guild).google_event_mapping()
 
-                result = await client.add_calendar_to_list(ics_url, subscription.name)
-                results.append({
-                    'name': subscription.name,
-                    'success': result.get('success'),
-                    'already_exists': result.get('already_exists', False),
-                    'error': result.get('error'),
-                })
+            # Fetch events from all subscriptions
+            all_events = []
+            seen_api_ids = set()
+            async with LumaAPIClient() as api_client:
+                for sub_id, sub_data in subscriptions.items():
+                    subscription = Subscription.from_dict(sub_data)
+                    try:
+                        events = await api_client.get_calendar_events(
+                            calendar_identifier=subscription.api_id,
+                            limit=100,
+                        )
+                        for event in events:
+                            if event.api_id not in seen_api_ids:
+                                all_events.append(event)
+                                seen_api_ids.add(event.api_id)
+                    except Exception as e:
+                        log.warning(f"Error fetching events for {subscription.name}: {e}")
 
-            success_count = sum(1 for r in results if r['success'])
-            existing_count = sum(1 for r in results if r.get('already_exists'))
-            failed = [r for r in results if not r['success']]
+            # Filter to future events only
+            now = datetime.now(timezone.utc)
+            upcoming = [
+                e for e in all_events
+                if datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
+            ]
+            upcoming.sort(key=lambda x: x.start_at)
 
+            if not upcoming:
+                await status_msg.edit(content="📋 No upcoming events to sync.")
+                return
+
+            # Sync events to Google Calendar
+            sync_result = await client.sync_events(
+                calendar_id=cal_id,
+                events=upcoming,
+                existing_mapping=existing_mapping,
+            )
+
+            # Save updated mapping
+            await self.config.guild(ctx.guild).google_event_mapping.set(sync_result['mapping'])
+
+            stats = sync_result['stats']
             embed = discord.Embed(
                 title="📅 Sync Complete",
-                color=discord.Color.green() if not failed else discord.Color.orange(),
+                color=discord.Color.green() if stats['failed'] == 0 else discord.Color.orange(),
             )
-
             embed.add_field(
                 name="Results",
-                value=f"✅ {success_count} synced\n🔁 {existing_count} already existed\n❌ {len(failed)} failed",
+                value=f"✅ {stats['created']} created\n🔁 {stats['updated']} updated\n⏭️ {stats['skipped']} skipped\n❌ {stats['failed']} failed",
                 inline=False,
             )
-
-            cal_id = aggregate_config.get('calendar_id')
+            embed.add_field(
+                name="Total Events",
+                value=f"{len(upcoming)} upcoming events across {len(subscriptions)} calendars",
+                inline=True,
+            )
             embed.add_field(
                 name="View Calendar",
                 value=f"[Open in Google Calendar](https://calendar.google.com/calendar?cid={cal_id.replace('@', '%40')})",
                 inline=False,
             )
 
-            if failed:
-                failed_list = "\n".join([f"• {r['name']}: {r.get('error', 'Unknown error')}" for r in failed[:5]])
-                embed.add_field(name="Failed", value=failed_list, inline=False)
+            if stats['errors']:
+                error_list = "\n".join(f"• {e}" for e in stats['errors'][:5])
+                embed.add_field(name="Errors", value=error_list, inline=False)
 
             await status_msg.edit(content=None, embed=embed)
 
@@ -1452,14 +1515,13 @@ class Luma(commands.Cog):
         """Migrate existing subscriptions to aggregate calendar.
 
         This command will:
-        1. Sync all subscriptions to Google Calendar
+        1. Sync all events to Google Calendar
         2. Clear the event database (to reset "new event" tracking)
         3. Trigger a force update to blast all events to channels
 
         Use this when setting up the aggregate calendar for the first time
         with existing subscriptions.
         """
-        import os
         from .google_calendar import GoogleCalendarClient
 
         creds = await self.config.google_credentials()
@@ -1484,25 +1546,52 @@ class Luma(commands.Cog):
             'errors': [],
         }
 
-        # Step 1: Sync to Google Calendar if configured
+        # Step 1: Sync events to Google Calendar if configured
         if creds and aggregate_config:
             try:
                 client = GoogleCalendarClient(creds)
-                sync_results = []
+                cal_id = aggregate_config.get('calendar_id')
+                existing_mapping = await self.config.guild(ctx.guild).google_event_mapping()
 
-                for sub_id, sub_data in subscriptions.items():
-                    subscription = Subscription.from_dict(sub_data)
-                    ics_url = f"https://api2.luma.com/ics/get?entity=calendar&id={subscription.api_id}"
-                    result = await client.add_calendar_to_list(ics_url, subscription.name)
-                    sync_results.append({
-                        'name': subscription.name,
-                        'success': result.get('success'),
-                        'already_exists': result.get('already_exists', False),
-                    })
+                all_events = []
+                seen_api_ids = set()
+                async with LumaAPIClient() as api_client:
+                    for sub_id, sub_data in subscriptions.items():
+                        subscription = Subscription.from_dict(sub_data)
+                        try:
+                            events = await api_client.get_calendar_events(
+                                calendar_identifier=subscription.api_id, limit=100,
+                            )
+                            for event in events:
+                                if event.api_id not in seen_api_ids:
+                                    all_events.append(event)
+                                    seen_api_ids.add(event.api_id)
+                        except Exception as e:
+                            results['errors'].append(f"Fetch {subscription.name}: {str(e)}")
 
-                success = sum(1 for r in sync_results if r['success'])
-                existing = sum(1 for r in sync_results if r.get('already_exists'))
-                results['google_sync'] = {'success': success, 'existing': existing, 'total': len(sync_results)}
+                now = datetime.now(timezone.utc)
+                upcoming = [
+                    e for e in all_events
+                    if datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
+                ]
+                upcoming.sort(key=lambda x: x.start_at)
+
+                if upcoming:
+                    sync_result = await client.sync_events(
+                        calendar_id=cal_id,
+                        events=upcoming,
+                        existing_mapping=existing_mapping,
+                    )
+                    await self.config.guild(ctx.guild).google_event_mapping.set(sync_result['mapping'])
+                    stats = sync_result['stats']
+                    results['google_sync'] = {
+                        'created': stats['created'],
+                        'updated': stats['updated'],
+                        'failed': stats['failed'],
+                        'total': len(upcoming),
+                    }
+                else:
+                    results['google_sync'] = {'created': 0, 'updated': 0, 'failed': 0, 'total': 0}
 
             except Exception as e:
                 results['errors'].append(f"Google sync: {str(e)}")
@@ -1537,10 +1626,10 @@ class Luma(commands.Cog):
         embed.color = discord.Color.green() if not results['errors'] else discord.Color.orange()
 
         if results['google_sync']:
+            gs = results['google_sync']
             embed.add_field(
                 name="Google Calendar",
-                value=f"✅ {results['google_sync']['success']} synced\n"
-                      f"🔁 {results['google_sync']['existing']} already existed",
+                value=f"✅ {gs['created']} created\n🔁 {gs['updated']} updated\n❌ {gs['failed']} failed\n📊 {gs['total']} total",
                 inline=True,
             )
         else:
@@ -1576,17 +1665,65 @@ class Luma(commands.Cog):
     async def aggregate_clear(self, ctx: commands.Context):
         """Clear the aggregate calendar configuration.
 
-        This only removes the configuration from the bot. It does not
-        remove any calendars or events from Google Calendar.
+        This removes the configuration and event mapping from the bot.
+        Events already created in Google Calendar remain there.
+        Use `[p]luma aggregate purge` to also delete events from Google Calendar.
         """
         await self.config.guild(ctx.guild).aggregate_calendar.set(None)
+        await self.config.guild(ctx.guild).google_event_mapping.set({})
 
         embed = discord.Embed(
             title="Aggregate Calendar Cleared",
-            description="The aggregate calendar configuration has been removed.\nNote: Any calendars added to Google Calendar remain there.",
+            description="Configuration and event mapping removed.\nNote: Events in Google Calendar remain there.",
             color=discord.Color.orange(),
         )
         await ctx.send(embed=embed)
+
+    @aggregate_group.command(name="purge")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def aggregate_purge(self, ctx: commands.Context):
+        """Delete all synced events from the aggregate Google Calendar.
+
+        This removes all events that were created by the bot from the
+        target Google Calendar and clears the event mapping.
+        """
+        from .google_calendar import GoogleCalendarClient
+
+        creds = await self.config.google_credentials()
+        aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
+
+        if not creds or not aggregate_config:
+            await ctx.send("❌ No aggregate calendar configured.")
+            return
+
+        mapping = await self.config.guild(ctx.guild).google_event_mapping()
+        if not mapping:
+            await ctx.send("📋 No synced events to purge.")
+            return
+
+        cal_id = aggregate_config.get('calendar_id')
+        status_msg = await ctx.send(f"🔄 Purging {len(mapping)} events from Google Calendar...")
+
+        try:
+            client = GoogleCalendarClient(creds)
+            result = await client.clear_calendar(cal_id, mapping)
+
+            await self.config.guild(ctx.guild).google_event_mapping.set({})
+
+            embed = discord.Embed(
+                title="🗑️ Events Purged",
+                color=discord.Color.orange(),
+            )
+            embed.add_field(
+                name="Results",
+                value=f"✅ {result['deleted']} deleted\n❌ {result['failed']} failed",
+                inline=False,
+            )
+            await status_msg.edit(content=None, embed=embed)
+
+        except Exception as e:
+            log.error(f"Error purging Google Calendar events: {e}")
+            await status_msg.edit(content=f"❌ Error: {str(e)}")
 
     @luma_group.group(name="groups")
     async def groups_group(self, ctx: commands.Context):
