@@ -1,7 +1,7 @@
 import sqlite3
 import logging
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 
@@ -118,6 +118,8 @@ class EventDatabase:
                         event_api_id TEXT NOT NULL,
                         guild_id INTEGER NOT NULL,
                         channel_id INTEGER NOT NULL,
+                        message_id INTEGER,
+                        start_at TEXT,
                         sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (event_api_id) REFERENCES events (event_api_id)
                     )
@@ -145,6 +147,21 @@ class EventDatabase:
                     ON event_history(guild_id, channel_id)
                 """
                 )
+
+                conn.commit()
+
+                # Migrate: add message_id and start_at columns if missing
+                try:
+                    cursor.execute("SELECT message_id FROM event_history LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE event_history ADD COLUMN message_id INTEGER")
+                    log.info("Added message_id column to event_history")
+
+                try:
+                    cursor.execute("SELECT start_at FROM event_history LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE event_history ADD COLUMN start_at TEXT")
+                    log.info("Added start_at column to event_history")
 
                 conn.commit()
                 log.info("Event database initialized successfully")
@@ -315,7 +332,8 @@ class EventDatabase:
                 return events  # Return all events if database query fails
 
     async def record_event_sent(
-        self, event_api_id: str, guild_id: int, channel_id: int
+        self, event_api_id: str, guild_id: int, channel_id: int,
+        message_id: int = None, start_at: str = None
     ):
         """Record that an event was sent to a Discord channel."""
         async with self._lock:
@@ -325,15 +343,16 @@ class EventDatabase:
 
                     cursor.execute(
                         """
-                        INSERT INTO event_history (event_api_id, guild_id, channel_id)
-                        VALUES (?, ?, ?)
+                        INSERT INTO event_history (event_api_id, guild_id, channel_id, message_id, start_at)
+                        VALUES (?, ?, ?, ?, ?)
                     """,
-                        (event_api_id, guild_id, channel_id),
+                        (event_api_id, guild_id, channel_id, message_id, start_at),
                     )
 
                     conn.commit()
                     log.debug(
-                        f"Recorded event {event_api_id} sent to guild {guild_id}, channel {channel_id}"
+                        f"Recorded event {event_api_id} sent to guild {guild_id}, "
+                        f"channel {channel_id}, message {message_id}"
                     )
 
             except Exception as e:
@@ -369,6 +388,71 @@ class EventDatabase:
             except Exception as e:
                 log.error(f"Failed to check recent event send: {e}")
                 return False
+
+    async def get_expired_messages(self, hours_after_event: int = 2) -> List[Dict[str, Any]]:
+        """Get messages for events that have already passed.
+
+        Args:
+            hours_after_event: Hours after event end time before marking as expired
+
+        Returns:
+            List of dicts with guild_id, channel_id, message_id, event_api_id
+        """
+        async with self._lock:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+
+                    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_after_event)
+
+                    cursor.execute(
+                        """
+                        SELECT eh.guild_id, eh.channel_id, eh.message_id, eh.event_api_id,
+                               eh.id as history_id, e.start_at, e.end_at, e.name
+                        FROM event_history eh
+                        JOIN events e ON eh.event_api_id = e.event_api_id
+                        WHERE eh.message_id IS NOT NULL
+                        AND e.start_at < ?
+                    """,
+                        (cutoff.isoformat(),),
+                    )
+
+                    results = []
+                    for row in cursor.fetchall():
+                        results.append({
+                            'guild_id': row['guild_id'],
+                            'channel_id': row['channel_id'],
+                            'message_id': row['message_id'],
+                            'event_api_id': row['event_api_id'],
+                            'history_id': row['history_id'],
+                            'event_name': row['name'],
+                        })
+
+                    return results
+
+            except Exception as e:
+                log.error(f"Failed to get expired messages: {e}")
+                return []
+
+    async def delete_history_records(self, history_ids: List[int]):
+        """Delete event history records by their IDs."""
+        if not history_ids:
+            return
+
+        async with self._lock:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    placeholders = ",".join(["?" for _ in history_ids])
+                    cursor.execute(
+                        f"DELETE FROM event_history WHERE id IN ({placeholders})",
+                        history_ids,
+                    )
+                    conn.commit()
+                    log.debug(f"Deleted {len(history_ids)} history records")
+            except Exception as e:
+                log.error(f"Failed to delete history records: {e}")
 
     async def get_calendar_stats(self) -> Dict[str, Any]:
         """Get statistics about tracked calendars and events."""

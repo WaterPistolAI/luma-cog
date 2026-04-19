@@ -251,24 +251,27 @@ class Luma(commands.Cog):
 
         self.config.register_guild(**default_guild)
 
-        # Background task for updating events
+        # Background tasks
         self.update_task = None
+        self.cleanup_task = None
         self.bot.loop.create_task(self.initialize())
 
     async def initialize(self):
         """Initialize the cog and start background tasks.
 
         This method is called when the cog is loaded. It waits for the bot
-        to be ready and then starts the background update task.
-        For multi-guild support, each guild manages its own enabled status.
+        to be ready and then starts the background update and cleanup tasks.
         """
         await self.bot.wait_until_ready()
         await self.start_update_task()
+        self.cleanup_task = self.bot.loop.create_task(self.cleanup_expired_messages())
 
     def cog_unload(self):
         """Clean up when cog is unloaded."""
         if self.update_task:
             self.update_task.cancel()
+        if self.cleanup_task:
+            self.cleanup_task.cancel()
 
     async def start_update_task(self):
         """Start the background task for updating events."""
@@ -301,6 +304,63 @@ class Luma(commands.Cog):
                 log.error(f"Error updating events for guild {guild.id}: {e}")
 
         await self.config.last_update.set(datetime.now(timezone.utc).isoformat())
+
+    async def cleanup_expired_messages(self):
+        """Background task to delete Discord messages for expired events.
+
+        Runs every hour and removes messages for events that have already passed.
+        """
+        await self.bot.wait_until_ready()
+        while True:
+            try:
+                await asyncio.sleep(3600)  # Run every hour
+
+                expired = await self.event_db.get_expired_messages(hours_after_event=2)
+                if not expired:
+                    continue
+
+                deleted_count = 0
+                history_ids_to_remove = []
+
+                for record in expired:
+                    try:
+                        guild = self.bot.get_guild(record['guild_id'])
+                        if not guild:
+                            continue
+
+                        channel = guild.get_channel(record['channel_id'])
+                        if not channel:
+                            continue
+
+                        message_id = record['message_id']
+                        if not message_id:
+                            continue
+
+                        try:
+                            msg = await channel.fetch_message(message_id)
+                            await msg.delete()
+                            deleted_count += 1
+                        except discord.NotFound:
+                            pass
+                        except discord.Forbidden:
+                            log.warning(f"No permission to delete message {message_id}")
+                        except discord.HTTPException:
+                            pass
+
+                        history_ids_to_remove.append(record['history_id'])
+
+                    except Exception as e:
+                        log.debug(f"Error cleaning up message: {e}")
+
+                if history_ids_to_remove:
+                    await self.event_db.delete_history_records(history_ids_to_remove)
+
+                if deleted_count > 0:
+                    log.info(f"Cleaned up {deleted_count} expired event messages")
+
+            except Exception as e:
+                log.error(f"Error in cleanup loop: {e}")
+                await asyncio.sleep(300)
 
     async def update_guild_events(self, guild: discord.Guild):
         """Update events for a specific guild with comprehensive debugging."""
@@ -665,8 +725,8 @@ class Luma(commands.Cog):
             # Send each event as an individual message
             for event in events[:10]:  # Limit to 10 events per update
                 try:
-                    await self._send_single_event_embed(
-                        channel, event, subscriptions, group_name
+                    message = await self._send_single_event_embed(
+                        channel, event, subscriptions, group_name, guild.id
                     )
                     # Small delay between messages to avoid rate limiting
                     await asyncio.sleep(0.5)
@@ -687,8 +747,12 @@ class Luma(commands.Cog):
         event: Event,
         subscriptions: Dict,
         group_name: str,
+        guild_id: int = None,
     ):
-        """Send a single event as its own Discord embed message."""
+        """Send a single event as its own Discord embed message.
+
+        Returns the sent message object for tracking.
+        """
         start_time = datetime.fromisoformat(event.start_at.replace("Z", "+00:00"))
 
         # Format date/time nicely
@@ -776,7 +840,19 @@ class Luma(commands.Cog):
         embed.description = description
         embed.set_footer(text=f"From: {group_name}")
 
-        await channel.send(embed=embed)
+        message = await channel.send(embed=embed)
+
+        # Track the message for cleanup after event expires
+        if guild_id and message:
+            await self.event_db.record_event_sent(
+                event_api_id=event.api_id,
+                guild_id=guild_id,
+                channel_id=channel.id,
+                message_id=message.id,
+                start_at=event.start_at,
+            )
+
+        return message
 
     @commands.group(name="luma", invoke_without_command=True)
     @commands.guild_only()
