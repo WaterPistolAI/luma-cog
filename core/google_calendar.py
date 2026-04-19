@@ -1,5 +1,6 @@
 import logging
 import os
+import aiohttp
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 
@@ -12,6 +13,42 @@ class GoogleCalendarClient:
     def __init__(self, credentials_data: Optional[Dict] = None):
         self.credentials_data = credentials_data
         self._service = None
+
+    async def validate_ics_feed(self, ics_url: str) -> Dict[str, Any]:
+        """Validate that an ICS feed is accessible.
+
+        Args:
+            ics_url: The ICS feed URL to validate
+
+        Returns:
+            Dict with validation status and details
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.head(ics_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        content_type = response.headers.get('Content-Type', '')
+                        return {
+                            'valid': True,
+                            'status': response.status,
+                            'content_type': content_type,
+                        }
+                    else:
+                        return {
+                            'valid': False,
+                            'status': response.status,
+                            'error': f'HTTP {response.status}',
+                        }
+        except aiohttp.ClientError as e:
+            return {
+                'valid': False,
+                'error': f'Connection error: {str(e)}',
+            }
+        except Exception as e:
+            return {
+                'valid': False,
+                'error': str(e),
+            }
 
     async def _get_service(self):
         """Get authenticated Google Calendar service."""
@@ -45,16 +82,27 @@ class GoogleCalendarClient:
                 "Run: pip install google-api-python-client google-auth"
             )
 
-    async def add_calendar_to_list(self, ics_url: str, calendar_name: str) -> Dict[str, Any]:
+    async def add_calendar_to_list(self, ics_url: str, calendar_name: str, validate: bool = True) -> Dict[str, Any]:
         """Add an external ICS calendar to the authenticated user's calendar list.
 
         Args:
             ics_url: The ICS feed URL to add
             calendar_name: Friendly name for the calendar
+            validate: Whether to validate the ICS feed first (default: True)
 
         Returns:
             Dict with success status and calendar info
         """
+        if validate:
+            validation = await self.validate_ics_feed(ics_url)
+            if not validation.get('valid'):
+                log.warning(f"ICS feed validation failed for {calendar_name}: {validation.get('error')}")
+                return {
+                    'success': False,
+                    'error': f"ICS feed not accessible: {validation.get('error')}",
+                    'validation': validation,
+                }
+
         try:
             service = await self._get_service()
 

@@ -26,6 +26,73 @@ from .database import EventDatabase
 log = logging.getLogger("red.luma")
 
 
+def parse_calendar_identifier(input_str: str) -> str:
+    """Parse calendar ID from various input formats.
+
+    Accepts:
+    - Raw API ID: cal-xxxxx
+    - Slug: genai-ny
+    - ICS URL: https://api2.luma.com/ics/get?entity=calendar&id=cal-xxxxx
+    - Google Calendar URL: https://www.google.com/calendar/render?cid=...
+    - Outlook URL: https://outlook.live.com/calendar/0/addcalendar?url=...
+
+    Returns:
+        Calendar ID (cal-xxxxx) or original input if not a URL
+    """
+    import re
+    from urllib.parse import urlparse, parse_qs, unquote
+
+    input_str = input_str.strip()
+
+    # Already a calendar ID (starts with cal-)
+    if input_str.startswith('cal-'):
+        return input_str
+
+    # Check if it's a URL
+    if not input_str.startswith('http'):
+        # Assume it's a slug
+        return input_str
+
+    try:
+        # Decode URL encoding
+        decoded = unquote(input_str)
+
+        # Try to extract cal- ID from the URL
+        cal_match = re.search(r'cal-[a-zA-Z0-9]+', decoded)
+        if cal_match:
+            return cal_match.group(0)
+
+        # Try to extract from query parameters
+        parsed = urlparse(decoded)
+        params = parse_qs(parsed.query)
+
+        # Check for 'id' parameter
+        if 'id' in params:
+            return params['id'][0]
+
+        # Check for 'cid' parameter (Google Calendar)
+        if 'cid' in params:
+            cid = params['cid'][0]
+            cid_decoded = unquote(cid)
+            cal_match = re.search(r'cal-[a-zA-Z0-9]+', cid_decoded)
+            if cal_match:
+                return cal_match.group(0)
+
+        # Check for 'url' parameter (Outlook)
+        if 'url' in params:
+            url_param = params['url'][0]
+            url_decoded = unquote(url_param)
+            cal_match = re.search(r'cal-[a-zA-Z0-9]+', url_decoded)
+            if cal_match:
+                return cal_match.group(0)
+
+    except Exception as e:
+        log.debug(f"Error parsing URL: {e}")
+
+    # Return original input as fallback
+    return input_str
+
+
 def get_timezone_abbr(timezone_str: str) -> str:
     """Get timezone abbreviation from timezone string using pytz."""
     if not timezone_str:
@@ -768,15 +835,26 @@ class Luma(commands.Cog):
 
     @subscriptions_group.command(name="add")
     @checks.admin_or_permissions(manage_guild=True)
-    async def add_subscription(self, ctx: commands.Context, api_id: str):
+    async def add_subscription(self, ctx: commands.Context, *, identifier: str):
         """Add a new Luma calendar subscription.
 
         Parameters:
-        - api_id: The API ID of the Luma calendar
+        - identifier: Can be any of the following formats:
+          - Calendar API ID: `cal-xxxxx`
+          - Calendar slug: `genai-ny`
+          - ICS URL: `https://api2.luma.com/ics/get?entity=calendar&id=cal-xxxxx`
+          - Google Calendar URL: `https://www.google.com/calendar/render?cid=...`
+          - Outlook URL: `https://outlook.live.com/calendar/0/addcalendar?url=...`
 
-        The command will automatically fetch the calendar's slug and name
-        from the Luma API to populate the subscription data.
+        The command will automatically extract the calendar ID and fetch
+        the calendar's slug and name from the Luma API.
+
+        Example:
+        `[p]luma subscriptions add https://api2.luma.com/ics/get?entity=calendar&id=cal-xxxxx`
         """
+        # Parse the identifier to extract calendar ID
+        api_id = parse_calendar_identifier(identifier)
+
         subscriptions = await self.config.guild(ctx.guild).subscriptions()
 
         if api_id in subscriptions:
@@ -1367,6 +1445,131 @@ class Luma(commands.Cog):
             await ctx.send(f"❌ Missing dependencies: {str(e)}\nRun: `pip install google-api-python-client google-auth`")
         except Exception as e:
             await ctx.send(f"❌ Error: {str(e)}")
+
+    @aggregate_group.command(name="migrate")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def aggregate_migrate(self, ctx: commands.Context):
+        """Migrate existing subscriptions to aggregate calendar.
+
+        This command will:
+        1. Sync all subscriptions to Google Calendar
+        2. Clear the event database (to reset "new event" tracking)
+        3. Trigger a force update to blast all events to channels
+
+        Use this when setting up the aggregate calendar for the first time
+        with existing subscriptions.
+        """
+        import os
+        from .google_calendar import GoogleCalendarClient
+
+        creds = await self.config.google_credentials()
+        aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
+        subscriptions = await self.config.guild(ctx.guild).subscriptions()
+
+        if not subscriptions:
+            await ctx.send("❌ No subscriptions to migrate.")
+            return
+
+        embed = discord.Embed(
+            title="🔄 Migration Started",
+            description="Migrating existing subscriptions to aggregate calendar...",
+            color=discord.Color.blue(),
+        )
+        status_msg = await ctx.send(embed=embed)
+
+        results = {
+            'google_sync': None,
+            'database_cleared': False,
+            'events_blasted': 0,
+            'errors': [],
+        }
+
+        # Step 1: Sync to Google Calendar if configured
+        if creds and aggregate_config:
+            try:
+                client = GoogleCalendarClient(creds)
+                sync_results = []
+
+                for sub_id, sub_data in subscriptions.items():
+                    subscription = Subscription.from_dict(sub_data)
+                    ics_url = f"https://api2.luma.com/ics/get?entity=calendar&id={subscription.api_id}"
+                    result = await client.add_calendar_to_list(ics_url, subscription.name)
+                    sync_results.append({
+                        'name': subscription.name,
+                        'success': result.get('success'),
+                        'already_exists': result.get('already_exists', False),
+                    })
+
+                success = sum(1 for r in sync_results if r['success'])
+                existing = sum(1 for r in sync_results if r.get('already_exists'))
+                results['google_sync'] = {'success': success, 'existing': existing, 'total': len(sync_results)}
+
+            except Exception as e:
+                results['errors'].append(f"Google sync: {str(e)}")
+
+        # Step 2: Clear event database
+        try:
+            calendar_ids = list(subscriptions.keys())
+            clear_result = await self.event_db.clear_event_database(calendar_ids)
+            results['database_cleared'] = clear_result.get('success', False)
+        except Exception as e:
+            results['errors'].append(f"Database clear: {str(e)}")
+
+        # Step 3: Force update to blast events
+        try:
+            channel_groups = await self.config.guild(ctx.guild).channel_groups()
+
+            for group_name, group_data in channel_groups.items():
+                group = ChannelGroup.from_dict(group_data)
+                result = await self.fetch_events_for_group(group, subscriptions, check_for_changes=False)
+
+                if result['events']:
+                    await self.send_events_to_channel(
+                        group.channel_id, result['events'], ctx.guild, group_name
+                    )
+                    results['events_blasted'] += len(result['events'])
+
+        except Exception as e:
+            results['errors'].append(f"Event blast: {str(e)}")
+
+        # Build result embed
+        embed.title = "✅ Migration Complete"
+        embed.color = discord.Color.green() if not results['errors'] else discord.Color.orange()
+
+        if results['google_sync']:
+            embed.add_field(
+                name="Google Calendar",
+                value=f"✅ {results['google_sync']['success']} synced\n"
+                      f"🔁 {results['google_sync']['existing']} already existed",
+                inline=True,
+            )
+        else:
+            embed.add_field(
+                name="Google Calendar",
+                value="⏭️ Skipped (not configured)",
+                inline=True,
+            )
+
+        embed.add_field(
+            name="Database",
+            value="✅ Cleared" if results['database_cleared'] else "❌ Failed",
+            inline=True,
+        )
+
+        embed.add_field(
+            name="Events Blasted",
+            value=f"📢 {results['events_blasted']} events sent to channels",
+            inline=True,
+        )
+
+        if results['errors']:
+            embed.add_field(
+                name="Errors",
+                value="\n".join(f"• {e}" for e in results['errors'][:5]),
+                inline=False,
+            )
+
+        await status_msg.edit(embed=embed)
 
     @aggregate_group.command(name="clear", aliases=["reset", "delete"])
     @checks.admin_or_permissions(manage_guild=True)
