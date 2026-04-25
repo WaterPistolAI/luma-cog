@@ -904,10 +904,10 @@ class Luma(commands.Cog):
         for sub_id, sub_data in subscriptions.items():
             subscription = Subscription.from_dict(sub_data)
             if subscription.slug:
-                luma_url = f"https://lu.ma/{subscription.slug}"
+                url = f"https://lu.ma/{subscription.slug}"
                 embed.add_field(
                     name=subscription.name,
-                    value=f"[{luma_url}]({luma_url})",
+                    value=f"[View on Luma]({url})",
                     inline=False,
                 )
 
@@ -918,7 +918,7 @@ class Luma(commands.Cog):
                 f"src={urllib.parse.quote(cal_id, safe='')}"
                 f"&ctz=America%2FNew_York"
             )
-            gcal_web_url = f"https://calendar.google.com/calendar/u/0?cid={urllib.parse.quote(cal_id, safe='')}"
+            gcal_web_url = f"https://calendar.google.com/calendar/u/0/r?cid={urllib.parse.quote(cal_id, safe='')}"
             embed.add_field(
                 name="📆 Aggregate Google Calendar",
                 value=f"[View in browser]({gcal_embed_url})\n[Open in Google Calendar]({gcal_web_url})",
