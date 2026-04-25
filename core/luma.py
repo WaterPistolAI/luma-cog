@@ -878,7 +878,10 @@ class Luma(commands.Cog):
 
     @luma_group.command(name="calendar", aliases=["cal"])
     async def calendar_links(self, ctx: commands.Context):
-        """Show shareable Luma calendar links for all subscriptions.
+        """Show shareable calendar links for all subscriptions.
+
+        Shows both Luma calendar pages and the Google Calendar embed link
+        (opens a full calendar view in your browser).
 
         Example:
         `[p]luma calendar`
@@ -891,20 +894,36 @@ class Luma(commands.Cog):
             )
             return
 
+        aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
+
         embed = discord.Embed(
-            title="📅 Luma Calendars",
+            title="📅 Calendars",
             color=discord.Color.blue(),
         )
 
         for sub_id, sub_data in subscriptions.items():
             subscription = Subscription.from_dict(sub_data)
             if subscription.slug:
-                url = f"https://lu.ma/{subscription.slug}"
+                luma_url = f"https://lu.ma/{subscription.slug}"
                 embed.add_field(
                     name=subscription.name,
-                    value=f"[{url}]({url})",
+                    value=f"[{luma_url}]({luma_url})",
                     inline=False,
                 )
+
+        if aggregate_config and aggregate_config.get("calendar_id"):
+            cal_id = aggregate_config["calendar_id"]
+            gcal_embed_url = (
+                f"https://calendar.google.com/calendar/embed?"
+                f"src={urllib.parse.quote(cal_id, safe='')}"
+                f"&ctz=America%2FNew_York"
+            )
+            gcal_web_url = f"https://calendar.google.com/calendar/u/0?cid={urllib.parse.quote(cal_id, safe='')}"
+            embed.add_field(
+                name="📆 Aggregate Google Calendar",
+                value=f"[View in browser]({gcal_embed_url})\n[Open in Google Calendar]({gcal_web_url})",
+                inline=False,
+            )
 
         await ctx.send(embed=embed)
 
