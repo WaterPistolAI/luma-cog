@@ -878,7 +878,7 @@ class Luma(commands.Cog):
 
     @luma_group.command(name="calendar", aliases=["cal"])
     async def calendar_links(self, ctx: commands.Context, view: Optional[str] = "week"):
-        """Show shareable calendar links and a calendar preview.
+        """Show the aggregate Google Calendar with a screenshot preview.
 
         Renders the aggregate Google Calendar as a screenshot (requires playwright).
         Falls back to links only if playwright is not installed.
@@ -892,42 +892,33 @@ class Luma(commands.Cog):
         `[p]luma calendar` - Week view
         `[p]luma calendar month` - Month view
         """
-        subscriptions = await self.config.guild(ctx.guild).subscriptions()
+        aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
 
-        if not subscriptions:
+        if not aggregate_config or not aggregate_config.get("calendar_id"):
             await ctx.send(
-                "No subscriptions configured. Use `[p]luma subscriptions add` to add one."
+                "No aggregate calendar configured. Use `[p]luma aggregate setup <calendar_id>` to set one up."
             )
             return
 
-        aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
+        cal_id = aggregate_config["calendar_id"]
+        gcal_mode = "WEEK" if view.lower() != "month" else "MONTH"
+        gcal_embed_url = (
+            f"https://calendar.google.com/calendar/embed?"
+            f"src={urllib.parse.quote(cal_id, safe='')}"
+            f"&ctz=America%2FNew_York"
+            f"&mode={gcal_mode}"
+        )
+        gcal_web_url = f"https://calendar.google.com/calendar/u/0/r?cid={urllib.parse.quote(cal_id, safe='')}"
 
         embed = discord.Embed(
-            title="📅 Calendars",
+            title=f"📆 Calendar ({view.capitalize()} View)",
             color=discord.Color.blue(),
         )
-
-        for sub_id, sub_data in subscriptions.items():
-            subscription = Subscription.from_dict(sub_data)
-            if subscription.slug:
-                url = f"https://lu.ma/{subscription.slug}"
-                embed.add_field(
-                    name=subscription.name,
-                    value=f"[View on Luma]({url})",
-                    inline=False,
-                )
-
-        gcal_mode = "WEEK" if view.lower() != "month" else "MONTH"
-        gcal_embed_url = None
-
-        if aggregate_config and aggregate_config.get("calendar_id"):
-            cal_id = aggregate_config["calendar_id"]
-            gcal_embed_url = (
-                f"https://calendar.google.com/calendar/embed?"
-                f"src={urllib.parse.quote(cal_id, safe='')}"
-                f"&ctz=America%2FNew_York"
-                f"&mode={gcal_mode}"
-            )
+        embed.add_field(
+            name="Links",
+            value=f"[View in browser]({gcal_embed_url})\n[Open in Google Calendar]({gcal_web_url})",
+            inline=False,
+        )
 
         if gcal_embed_url:
             try:
@@ -958,6 +949,38 @@ class Luma(commands.Cog):
             await page.screenshot(path=tmp.name, full_page=False)
             await browser.close()
             return tmp.name
+
+    @luma_group.command(name="links")
+    async def subscription_links_cmd(self, ctx: commands.Context):
+        """Show all Luma calendar shareable links.
+
+        Example:
+        `[p]luma links`
+        """
+        subscriptions = await self.config.guild(ctx.guild).subscriptions()
+
+        if not subscriptions:
+            await ctx.send(
+                "No subscriptions configured. Use `[p]luma subscriptions add` to add one."
+            )
+            return
+
+        embed = discord.Embed(
+            title="📅 Luma Calendars",
+            color=discord.Color.blue(),
+        )
+
+        for sub_id, sub_data in subscriptions.items():
+            subscription = Subscription.from_dict(sub_data)
+            if subscription.slug:
+                url = f"https://lu.ma/{subscription.slug}"
+                embed.add_field(
+                    name=subscription.name,
+                    value=f"[{url}]({url})",
+                    inline=False,
+                )
+
+        await ctx.send(embed=embed)
 
     @luma_group.group(name="subscriptions", aliases=["subs"])
     async def subscriptions_group(self, ctx: commands.Context):
