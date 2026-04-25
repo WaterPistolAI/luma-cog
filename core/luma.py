@@ -445,17 +445,16 @@ class Luma(commands.Cog):
                 f"change_stats={result['change_stats']}"
             )
 
-            # Only send message if there are new events
-            if result["events"] and result["new_events_count"] > 0:
+            # Send upcoming events (dedup handled inside send_events_to_channel)
+            if result["events"]:
                 log.info(
-                    f"Sending {len(result['events'])} new events to group '{group_name}' "
-                    f"(detected {result['new_events_count']} new events)"
+                    f"Sending {len(result['events'])} events to group '{group_name}' "
+                    f"({result['new_events_count']} new to DB)"
                 )
                 await self.send_events_to_channel(
                     group.channel_id, result["events"], guild, group_name,
                     skip_already_sent=True,
                 )
-                messages_sent += len(result["events"])
             else:
                 log.info(
                     f"[DEBUG] No new events for group '{group_name}': "
@@ -541,44 +540,16 @@ class Luma(commands.Cog):
         # For automatic updates, only include events that are actually new
         if check_for_changes:
             log.debug(
-                "Processing for automatic updates - using pre-collected new events"
+                "Processing for automatic updates - returning all upcoming events, "
+                "dedup handled by send_events_to_channel"
             )
 
-            # CRITICAL FIX: Use the new events already collected during initial fetch
-            # Sort and filter new events
-            all_new_events.sort(key=lambda x: x.start_at)
-            cutoff_date = datetime.now(timezone.utc) - timedelta(days=1)
-            new_filtered_events = [
-                e
-                for e in all_new_events
-                if datetime.fromisoformat(e.start_at.replace("Z", "+00:00"))
-                >= cutoff_date
-            ]
-
-            # CRITICAL FIX: Deduplicate new events based on api_id to prevent duplicates
-            seen_new_api_ids = set()
-            deduplicated_new_events = []
-            for event in new_filtered_events:
-                if event.api_id not in seen_new_api_ids:
-                    deduplicated_new_events.append(event)
-                    seen_new_api_ids.add(event.api_id)
-                else:
-                    log.debug(f"Deduplicating NEW event {event.api_id}")
-
-            log.debug(f"New events after deduplication: {len(deduplicated_new_events)}")
-
-            # For automatic updates, return the new events (not all filtered events)
-            events_to_return = deduplicated_new_events[: group.max_events]
-
-            # FIX: Use the actual count of new events found (before deduplication)
-            # This ensures messages are sent when there are truly new events
+            events_to_return = filtered_events[: group.max_events]
             new_events_count = total_new_events
 
             log.debug(
-                f"Final result: {new_events_count} actual new events detected "
-                f"(displaying {len(events_to_return)} deduplicated events, "
-                f"out of {len(all_new_events)} detected, "
-                f"limited to {group.max_events} max per group)"
+                f"Automatic update: returning {len(events_to_return)} upcoming events "
+                f"({total_new_events} new to DB, limited to {group.max_events} max)"
             )
         else:
             # For manual updates, include all recent events
@@ -865,7 +836,7 @@ class Luma(commands.Cog):
         embed.description = description
         embed.set_footer(text=f"From: {group_name}")
 
-        message = await channel.send(embed=embed)
+        message = await channel.send(content=event_url, embed=embed)
 
         # Track the message for cleanup after event expires
         if guild_id and message:
