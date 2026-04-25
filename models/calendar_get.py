@@ -6,15 +6,19 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class Coordinate(BaseModel):
-    longitude: float
-    latitude: float
+    model_config = ConfigDict(extra="ignore")
+
+    longitude: Optional[float] = None
+    latitude: Optional[float] = None
 
 
 class Calendar(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     access_level: Optional[str] = None
     api_id: Optional[str] = None
     avatar_url: Optional[str] = None
@@ -34,7 +38,7 @@ class Calendar(BaseModel):
     meta_pixel_id: Optional[Any] = None
     name: Optional[str] = None
     personal_user_api_id: Optional[str] = None
-    refund_policy: Optional[RefundPolicy] = None
+    refund_policy: Optional[Any] = None
     show_subscriber_count: Optional[bool] = None
     slug: Optional[str] = None
     social_image_url: Optional[str] = None
@@ -52,10 +56,14 @@ class Calendar(BaseModel):
 
 
 class VirtualInfo(BaseModel):
-    has_access: bool
+    model_config = ConfigDict(extra="ignore")
+
+    has_access: Optional[bool] = None
 
 
 class GeoAddressInfo(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     mode: Optional[str] = None
     city_state: Optional[str] = None
     sublocality: Optional[str] = None
@@ -72,90 +80,110 @@ class GeoAddressInfo(BaseModel):
 
 
 class Coordinate1(BaseModel):
-    latitude: float
-    longitude: float
+    model_config = ConfigDict(extra="ignore")
+
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 class Event(BaseModel):
-    api_id: str
-    calendar_api_id: str
-    cover_url: str
-    end_at: str
-    event_type: str
-    hide_rsvp: bool
-    location_type: str
-    name: str
-    one_to_one: bool
+    model_config = ConfigDict(extra="ignore")
+
+    api_id: Optional[str] = None
+    calendar_api_id: Optional[str] = None
+    cover_url: Optional[str] = None
+    end_at: Optional[str] = None
+    event_type: Optional[str] = None
+    hide_rsvp: Optional[bool] = None
+    location_type: Optional[str] = None
+    name: Optional[str] = None
+    one_to_one: Optional[bool] = None
     recurrence_id: Optional[Any] = None
-    show_guest_list: bool
-    start_at: str
-    timezone: str
-    url: str
-    user_api_id: str
-    visibility: str
-    waitlist_enabled: bool
-    virtual_info: VirtualInfo
+    show_guest_list: Optional[bool] = None
+    start_at: Optional[str] = None
+    timezone: Optional[str] = None
+    url: Optional[str] = None
+    user_api_id: Optional[str] = None
+    visibility: Optional[str] = None
+    waitlist_enabled: Optional[bool] = None
+    virtual_info: Optional[VirtualInfo] = None
     geo_address_info: Optional[GeoAddressInfo] = None
-    geo_address_visibility: str
+    geo_address_visibility: Optional[str] = None
     coordinate: Optional[Coordinate1] = None
 
 
 class CoverImage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     vibrant_color: Optional[Any] = None
-    colors: List[str]
+    colors: Optional[List[str]] = None
 
 
 class Coordinate2(BaseModel):
-    longitude: float
-    latitude: float
+    model_config = ConfigDict(extra="ignore")
+
+    longitude: Optional[float] = None
+    latitude: Optional[float] = None
 
 
 class Attrs(BaseModel):
-    href: str
+    model_config = ConfigDict(extra="ignore")
+
+    href: Optional[str] = None
 
 
 class Mark(BaseModel):
-    type: str
-    attrs: Attrs
+    model_config = ConfigDict(extra="ignore")
+
+    type: Optional[str] = None
+    attrs: Optional[Attrs] = None
 
 
 class ContentItem1(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     text: Optional[str] = None
     type: Optional[str] = None
     marks: Optional[List[Mark]] = None
 
 
 class ContentItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     type: Optional[str] = None
     content: Optional[List[ContentItem1]] = None
 
 
 class RefundPolicy(BaseModel):
-    type: str
+    model_config = ConfigDict(extra="ignore")
+
+    type: Optional[str] = None
     content: Optional[List[ContentItem]] = None
 
 
 class Calendar1(BaseModel):
-    access_level: str
-    api_id: str
+    model_config = ConfigDict(extra="ignore")
+
+    access_level: Optional[str] = None
+    api_id: Optional[str] = None
     avatar_url: Optional[str] = None
     coordinate: Optional[Coordinate2] = None
     cover_image_url: Optional[str] = None
     description_short: Optional[str] = None
-    event_submission_restriction: str
+    event_submission_restriction: Optional[str] = None
     geo_city: Optional[str] = None
     geo_country: Optional[str] = None
     geo_region: Optional[str] = None
     google_measurement_id: Optional[Any] = None
     instagram_handle: Optional[str] = None
-    is_blocked: bool
-    launch_status: str
+    is_blocked: Optional[bool] = None
+    launch_status: Optional[str] = None
     linkedin_handle: Optional[str] = None
-    luma_plus_active: bool
+    luma_plus_active: Optional[bool] = None
     meta_pixel_id: Optional[Any] = None
-    name: str
+    name: Optional[str] = None
     personal_user_api_id: Optional[str] = None
-    refund_policy: Optional[RefundPolicy] = None
+    refund_policy: Optional[Any] = None
     show_subscriber_count: Optional[bool] = None
     slug: Optional[str] = None
     social_image_url: Optional[str] = None
@@ -164,23 +192,25 @@ class Calendar1(BaseModel):
     tiktok_handle: Optional[str] = None
     timezone: Optional[str] = None
     tint_color: Optional[str] = None
-    track_meta_ads_from_luma: bool
+    track_meta_ads_from_luma: Optional[bool] = None
     twitter_handle: Optional[str] = None
     verified_at: Optional[str] = None
     website: Optional[str] = None
     youtube_handle: Optional[str] = None
-    is_personal: bool
+    is_personal: Optional[bool] = None
 
 
 class Host(BaseModel):
-    name: str
-    api_id: str
+    model_config = ConfigDict(extra="ignore")
+
+    name: Optional[str] = None
+    api_id: Optional[str] = None
     website: Optional[str] = None
     timezone: Optional[str] = None
     username: Optional[str] = None
     bio_short: Optional[str] = None
-    avatar_url: str
-    is_verified: bool
+    avatar_url: Optional[str] = None
+    is_verified: Optional[bool] = None
     tiktok_handle: Optional[str] = None
     last_online_at: Optional[str] = None
     twitter_handle: Optional[str] = None
@@ -190,36 +220,44 @@ class Host(BaseModel):
 
 
 class Price(BaseModel):
-    cents: int
-    currency: str
-    is_flexible: bool
+    model_config = ConfigDict(extra="ignore")
+
+    cents: Optional[int] = None
+    currency: Optional[str] = None
+    is_flexible: Optional[bool] = None
 
 
 class CurrencyInfo(BaseModel):
-    currency: str
-    decimals: int
+    model_config = ConfigDict(extra="ignore")
+
+    currency: Optional[str] = None
+    decimals: Optional[int] = None
 
 
 class TicketInfo(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     price: Optional[Price] = None
-    is_free: bool
-    max_price: None
-    is_sold_out: bool
+    is_free: Optional[bool] = None
+    max_price: Optional[Any] = None
+    is_sold_out: Optional[bool] = None
     spots_remaining: Optional[int] = None
-    is_near_capacity: bool
-    require_approval: bool
+    is_near_capacity: Optional[bool] = None
+    require_approval: Optional[bool] = None
     currency_info: Optional[CurrencyInfo] = None
 
 
 class FeaturedGuest(BaseModel):
-    api_id: str
-    avatar_url: str
+    model_config = ConfigDict(extra="ignore")
+
+    api_id: Optional[str] = None
+    avatar_url: Optional[str] = None
     bio_short: Optional[str] = None
     instagram_handle: Optional[str] = None
-    is_verified: bool
+    is_verified: Optional[bool] = None
     last_online_at: Optional[str] = None
     linkedin_handle: Optional[str] = None
-    name: str
+    name: Optional[str] = None
     tiktok_handle: Optional[str] = None
     twitter_handle: Optional[str] = None
     username: Optional[str] = None
@@ -228,42 +266,50 @@ class FeaturedGuest(BaseModel):
 
 
 class Tag(BaseModel):
-    api_id: str
-    name: str
-    color: str
+    model_config = ConfigDict(extra="ignore")
+
+    api_id: Optional[str] = None
+    name: Optional[str] = None
+    color: Optional[str] = None
 
 
 class FeaturedItem(BaseModel):
-    api_id: str
-    event: Event
-    cover_image: CoverImage
-    calendar: Calendar1
-    start_at: str
-    hosts: List[Host]
-    guest_count: int
-    ticket_count: int
-    ticket_info: TicketInfo
-    featured_guests: List[FeaturedGuest]
+    model_config = ConfigDict(extra="ignore")
+
+    api_id: Optional[str] = None
+    event: Optional[Event] = None
+    cover_image: Optional[CoverImage] = None
+    calendar: Optional[Calendar1] = None
+    start_at: Optional[str] = None
+    hosts: Optional[List[Host]] = None
+    guest_count: Optional[int] = None
+    ticket_count: Optional[int] = None
+    ticket_info: Optional[TicketInfo] = None
+    featured_guests: Optional[List[FeaturedGuest]] = None
     role: Optional[Any] = None
-    waitlist_active: bool
-    calendar_api_id: str
-    is_manager: bool
-    platform: str
-    status: str
-    submitted_by_user_api_id: str
-    tags: List[Tag]
+    waitlist_active: Optional[bool] = None
+    calendar_api_id: Optional[str] = None
+    is_manager: Optional[bool] = None
+    platform: Optional[str] = None
+    status: Optional[str] = None
+    submitted_by_user_api_id: Optional[str] = None
+    tags: Optional[List[Tag]] = None
 
 
 class Tag1(BaseModel):
-    api_id: str
-    name: str
-    color: str
-    upcoming_event_count: int
+    model_config = ConfigDict(extra="ignore")
+
+    api_id: Optional[str] = None
+    name: Optional[str] = None
+    color: Optional[str] = None
+    upcoming_event_count: Optional[int] = None
 
 
 class AccessInfo(BaseModel):
-    type: str
-    require_approval: bool
+    model_config = ConfigDict(extra="ignore")
+
+    type: Optional[str] = None
+    require_approval: Optional[bool] = None
     currency: Optional[str] = None
     amount_yearly: Optional[int] = None
     amount_monthly: Optional[int] = None
@@ -274,37 +320,43 @@ class AccessInfo(BaseModel):
 
 
 class RegistrationQuestion(BaseModel):
-    id: str
-    label: str
-    options: List[str]
-    required: bool
-    question_type: str
+    model_config = ConfigDict(extra="ignore")
+
+    id: Optional[str] = None
+    label: Optional[str] = None
+    options: Optional[List[str]] = None
+    required: Optional[bool] = None
+    question_type: Optional[str] = None
     job_title_label: Optional[str] = None
     collect_job_title: Optional[bool] = None
 
 
 class MembershipTier(BaseModel):
-    api_id: str
-    access_info: AccessInfo
-    description: str
-    registration_questions: List[RegistrationQuestion]
-    calendar_api_id: str
-    tint_color: str
-    name: str
+    model_config = ConfigDict(extra="ignore")
+
+    api_id: Optional[str] = None
+    access_info: Optional[AccessInfo] = None
+    description: Optional[str] = None
+    registration_questions: Optional[List[RegistrationQuestion]] = None
+    calendar_api_id: Optional[str] = None
+    tint_color: Optional[str] = None
+    name: Optional[str] = None
 
 
 class Model(BaseModel):
-    calendar: Calendar
-    featured_items: List[FeaturedItem]
-    has_upcoming_events: bool
-    has_access: bool
-    is_admin: bool
+    model_config = ConfigDict(extra="ignore")
+
+    calendar: Optional[Calendar] = None
+    featured_items: Optional[List[FeaturedItem]] = None
+    has_upcoming_events: Optional[bool] = None
+    has_access: Optional[bool] = None
+    is_admin: Optional[bool] = None
     calendar_member: Optional[Any] = None
-    is_subscriber: bool
-    tags: List[Tag1]
-    event_start_ats: List[str]
-    membership_tiers: List[MembershipTier]
+    is_subscriber: Optional[bool] = None
+    tags: Optional[List[Tag1]] = None
+    event_start_ats: Optional[List[str]] = None
+    membership_tiers: Optional[List[MembershipTier]] = None
     subscriber_count: Optional[Any] = None
-    categories: List[Any]
+    categories: Optional[List[Any]] = None
     membership_info: Optional[Any] = None
-    can_subscribe: bool
+    can_subscribe: Optional[bool] = None
