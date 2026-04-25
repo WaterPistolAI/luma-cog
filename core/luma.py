@@ -877,16 +877,20 @@ class Luma(commands.Cog):
             await ctx.send(embed=embed)
 
     @luma_group.command(name="calendar", aliases=["cal"])
-    async def calendar_links(self, ctx: commands.Context):
-        """Show shareable calendar links for all subscriptions.
+    async def calendar_links(self, ctx: commands.Context, view: Optional[str] = "week"):
+        """Show shareable calendar links and a calendar preview.
 
-        Shows both Luma calendar pages and the Google Calendar embed link.
-        If playwright is installed, also renders the aggregate calendar as an image.
+        Renders the aggregate Google Calendar as a screenshot (requires playwright).
+        Falls back to links only if playwright is not installed.
 
-        Install preview support: pip install playwright && playwright install chromium
+        Install: pip install playwright && playwright install chromium
 
-        Example:
-        `[p]luma calendar`
+        Parameters:
+        <view> - Calendar view: 'week' (default) or 'month'
+
+        Examples:
+        `[p]luma calendar` - Week view
+        `[p]luma calendar month` - Month view
         """
         subscriptions = await self.config.guild(ctx.guild).subscriptions()
 
@@ -913,32 +917,30 @@ class Luma(commands.Cog):
                     inline=False,
                 )
 
+        gcal_mode = "WEEK" if view.lower() != "month" else "MONTH"
+        gcal_embed_url = None
+
         if aggregate_config and aggregate_config.get("calendar_id"):
             cal_id = aggregate_config["calendar_id"]
             gcal_embed_url = (
                 f"https://calendar.google.com/calendar/embed?"
                 f"src={urllib.parse.quote(cal_id, safe='')}"
                 f"&ctz=America%2FNew_York"
-            )
-            gcal_web_url = f"https://calendar.google.com/calendar/u/0/r?cid={urllib.parse.quote(cal_id, safe='')}"
-            embed.add_field(
-                name="📆 Aggregate Google Calendar",
-                value=f"[View in browser]({gcal_embed_url})\n[Open in Google Calendar]({gcal_web_url})",
-                inline=False,
+                f"&mode={gcal_mode}"
             )
 
-        try:
-            from playwright.async_api import async_playwright
-            screenshot_path = await self._render_calendar_screenshot(gcal_embed_url)
-            if screenshot_path:
-                await ctx.send(embed=embed, file=discord.File(screenshot_path))
-                import os
-                os.remove(screenshot_path)
-                return
-        except ImportError:
-            pass
-        except Exception as e:
-            log.warning(f"Calendar screenshot failed: {e}")
+        if gcal_embed_url:
+            try:
+                screenshot_path = await self._render_calendar_screenshot(gcal_embed_url)
+                if screenshot_path:
+                    await ctx.send(embed=embed, file=discord.File(screenshot_path))
+                    import os
+                    os.remove(screenshot_path)
+                    return
+            except ImportError:
+                pass
+            except Exception as e:
+                log.warning(f"Calendar screenshot failed: {e}")
 
         await ctx.send(embed=embed)
 
@@ -948,7 +950,7 @@ class Luma(commands.Cog):
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page(viewport={"width": 800, "height": 600})
+            page = await browser.new_page(viewport={"width": 1600, "height": 900})
             await page.goto(url, wait_until="networkidle", timeout=15000)
             await page.wait_for_timeout(2000)
             tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
