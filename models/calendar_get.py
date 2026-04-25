@@ -35,7 +35,7 @@ class Calendar(BaseModel):
     name: str
     personal_user_api_id: Optional[str] = None
     refund_policy: Optional[RefundPolicy] = None
-    show_subscriber_count: bool
+    show_subscriber_count: Optional[bool] = None
     slug: str
     social_image_url: str
     stripe_account_id: Optional[str] = None
@@ -156,7 +156,7 @@ class Calendar1(BaseModel):
     name: str
     personal_user_api_id: Optional[str] = None
     refund_policy: Optional[RefundPolicy] = None
-    show_subscriber_count: bool
+    show_subscriber_count: Optional[bool] = None
     slug: Optional[str] = None
     social_image_url: Optional[str] = None
     stripe_account_id: Optional[str] = None
