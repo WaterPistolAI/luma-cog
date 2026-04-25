@@ -30,16 +30,21 @@ class GoogleCalendarClient:
 
         try:
             from google.oauth2 import service_account
-            from googleapicliclient.discovery import build
+            from googleapiclient.discovery import build
+        except ImportError as e:
+            raise ImportError(
+                "Google Calendar API libraries not installed. "
+                "Run: pip install google-api-python-client google-auth"
+            ) from e
 
-            if not self.credentials_data:
-                creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
-                if creds_path and os.path.exists(creds_path):
-                    import json
-                    with open(creds_path, 'r') as f:
-                        self.credentials_data = json.load(f)
-                else:
-                    raise ValueError("No Google credentials configured")
+        try:
+            creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+            if creds_path and os.path.exists(creds_path):
+                import json
+                with open(creds_path, 'r') as f:
+                    self.credentials_data = json.load(f)
+            else:
+                raise ValueError("No Google credentials configured")
 
             credentials = service_account.Credentials.from_service_account_info(
                 self.credentials_data,
@@ -49,11 +54,11 @@ class GoogleCalendarClient:
             self._service = build('calendar', 'v3', credentials=credentials)
             return self._service
 
-        except ImportError:
-            raise ImportError(
-                "Google Calendar API libraries not installed. "
-                "Run: pip install google-api-python-client google-auth"
-            )
+        except Exception as e:
+            if isinstance(e, ValueError):
+                raise
+            log.error(f"Google Calendar connection error: {e}", exc_info=True)
+            raise
 
     async def test_connection(self) -> Dict[str, Any]:
         try:
