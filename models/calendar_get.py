@@ -163,7 +163,7 @@ class Calendar1(BaseModel):
     tax_config: Optional[Any] = None
     tiktok_handle: Optional[str] = None
     timezone: Optional[str] = None
-    tint_color: str
+    tint_color: Optional[str] = None
     track_meta_ads_from_luma: bool
     twitter_handle: Optional[str] = None
     verified_at: Optional[str] = None
@@ -176,7 +176,7 @@ class Host(BaseModel):
     name: str
     api_id: str
     website: Optional[str] = None
-    timezone: str
+    timezone: Optional[str] = None
     username: Optional[str] = None
     bio_short: Optional[str] = None
     avatar_url: str

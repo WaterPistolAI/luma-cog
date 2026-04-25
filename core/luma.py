@@ -1551,6 +1551,8 @@ class Luma(commands.Cog):
 
             if stats['errors']:
                 error_list = "\n".join(f"• {e}" for e in stats['errors'][:5])
+                if len(error_list) > 1024:
+                    error_list = error_list[:1020] + "\n..."
                 embed.add_field(name="Errors", value=error_list, inline=False)
 
             await status_msg.edit(content=None, embed=embed)
