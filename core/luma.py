@@ -880,8 +880,10 @@ class Luma(commands.Cog):
     async def calendar_links(self, ctx: commands.Context):
         """Show shareable calendar links for all subscriptions.
 
-        Shows both Luma calendar pages and the Google Calendar embed link
-        (opens a full calendar view in your browser).
+        Shows both Luma calendar pages and the Google Calendar embed link.
+        If playwright is installed, also renders the aggregate calendar as an image.
+
+        Install preview support: pip install playwright && playwright install chromium
 
         Example:
         `[p]luma calendar`
@@ -925,7 +927,35 @@ class Luma(commands.Cog):
                 inline=False,
             )
 
+        try:
+            from playwright.async_api import async_playwright
+            screenshot_path = await self._render_calendar_screenshot(gcal_embed_url)
+            if screenshot_path:
+                await ctx.send(embed=embed, file=discord.File(screenshot_path))
+                import os
+                os.remove(screenshot_path)
+                return
+        except ImportError:
+            pass
+        except Exception as e:
+            log.warning(f"Calendar screenshot failed: {e}")
+
         await ctx.send(embed=embed)
+
+    async def _render_calendar_screenshot(self, url: str) -> Optional[str]:
+        from playwright.async_api import async_playwright
+        import tempfile
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page(viewport={"width": 800, "height": 600})
+            await page.goto(url, wait_until="networkidle", timeout=15000)
+            await page.wait_for_timeout(2000)
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            tmp.close()
+            await page.screenshot(path=tmp.name, full_page=False)
+            await browser.close()
+            return tmp.name
 
     @luma_group.group(name="subscriptions", aliases=["subs"])
     async def subscriptions_group(self, ctx: commands.Context):
