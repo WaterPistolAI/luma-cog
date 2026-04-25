@@ -2469,25 +2469,26 @@ class Luma(commands.Cog):
     async def config_group(self, ctx: commands.Context):
         """Configure Luma plugin settings."""
         if ctx.invoked_subcommand is None:
-            guild_config = await self.config.guild(ctx.guild).all()
-            global_config = await self.config.all()
+            enabled = await self.config.guild(ctx.guild).enabled()
+            interval = await self.config.update_interval_hours()
+            last_update = await self.config.last_update()
 
             embed = discord.Embed(
                 title="Luma Configuration", color=discord.Color.blue()
             )
             embed.add_field(
                 name="Update Interval",
-                value=f"{global_config['update_interval_hours']} hours (global)",
+                value=f"{interval} hours (global)",
                 inline=True,
             )
             embed.add_field(
                 name="Enabled",
-                value="Yes" if guild_config["enabled"] else "No",
+                value="Yes" if enabled else "No",
                 inline=True,
             )
             embed.add_field(
                 name="Last Update",
-                value=global_config["last_update"] or "Never",
+                value=last_update or "Never",
                 inline=True,
             )
 

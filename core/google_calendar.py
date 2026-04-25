@@ -38,13 +38,14 @@ class GoogleCalendarClient:
             ) from e
 
         try:
-            creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
-            if creds_path and os.path.exists(creds_path):
-                import json
-                with open(creds_path, 'r') as f:
-                    self.credentials_data = json.load(f)
-            else:
-                raise ValueError("No Google credentials configured")
+            if not self.credentials_data:
+                creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+                if creds_path and os.path.exists(creds_path):
+                    import json
+                    with open(creds_path, 'r') as f:
+                        self.credentials_data = json.load(f)
+                else:
+                    raise ValueError("No Google credentials configured")
 
             credentials = service_account.Credentials.from_service_account_info(
                 self.credentials_data,

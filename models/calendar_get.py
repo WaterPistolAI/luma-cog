@@ -22,9 +22,9 @@ class Calendar(BaseModel):
     cover_image_url: str
     description_short: str
     event_submission_restriction: str
-    geo_city: str
-    geo_country: str
-    geo_region: str
+    geo_city: Optional[str] = None
+    geo_country: Optional[str] = None
+    geo_region: Optional[str] = None
     google_measurement_id: Optional[Any] = None
     instagram_handle: Optional[str] = None
     is_blocked: bool
