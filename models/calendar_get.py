@@ -175,18 +175,18 @@ class Calendar1(BaseModel):
 class Host(BaseModel):
     name: str
     api_id: str
-    website: Optional[str]
+    website: Optional[str] = None
     timezone: str
-    username: Optional[str]
-    bio_short: Optional[str]
+    username: Optional[str] = None
+    bio_short: Optional[str] = None
     avatar_url: str
     is_verified: bool
     tiktok_handle: Optional[str] = None
-    last_online_at: Optional[str]
-    twitter_handle: Optional[str]
-    youtube_handle: Optional[str]
-    linkedin_handle: Optional[str]
-    instagram_handle: Optional[str]
+    last_online_at: Optional[str] = None
+    twitter_handle: Optional[str] = None
+    youtube_handle: Optional[str] = None
+    linkedin_handle: Optional[str] = None
+    instagram_handle: Optional[str] = None
 
 
 class Price(BaseModel):
@@ -201,31 +201,30 @@ class CurrencyInfo(BaseModel):
 
 
 class TicketInfo(BaseModel):
-    price: Optional[Price]
+    price: Optional[Price] = None
     is_free: bool
     max_price: None
     is_sold_out: bool
-    spots_remaining: Optional[int]
+    spots_remaining: Optional[int] = None
     is_near_capacity: bool
     require_approval: bool
-    currency_info: Optional[CurrencyInfo]
+    currency_info: Optional[CurrencyInfo] = None
 
 
 class FeaturedGuest(BaseModel):
     api_id: str
     avatar_url: str
-    bio_short: Optional[str]
-    instagram_handle: Optional[str]
+    bio_short: Optional[str] = None
+    instagram_handle: Optional[str] = None
     is_verified: bool
-    last_online_at: Optional[str]
-    linkedin_handle: Optional[str]
+    last_online_at: Optional[str] = None
+    linkedin_handle: Optional[str] = None
     name: str
-    tiktok_handle: Optional[str]
-    timezone: str
-    twitter_handle: Optional[str]
-    username: Optional[str]
-    website: Optional[str]
-    youtube_handle: Optional[str]
+    tiktok_handle: Optional[str] = None
+    twitter_handle: Optional[str] = None
+    username: Optional[str] = None
+    website: Optional[str] = None
+    youtube_handle: Optional[str] = None
 
 
 class Tag(BaseModel):
