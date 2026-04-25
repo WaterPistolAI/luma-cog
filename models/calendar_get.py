@@ -15,40 +15,40 @@ class Coordinate(BaseModel):
 
 
 class Calendar(BaseModel):
-    access_level: str
-    api_id: str
-    avatar_url: str
+    access_level: Optional[str] = None
+    api_id: Optional[str] = None
+    avatar_url: Optional[str] = None
     coordinate: Optional[Coordinate] = None
-    cover_image_url: str
-    description_short: str
-    event_submission_restriction: str
+    cover_image_url: Optional[str] = None
+    description_short: Optional[str] = None
+    event_submission_restriction: Optional[str] = None
     geo_city: Optional[str] = None
     geo_country: Optional[str] = None
     geo_region: Optional[str] = None
     google_measurement_id: Optional[Any] = None
     instagram_handle: Optional[str] = None
-    is_blocked: bool
-    launch_status: str
+    is_blocked: Optional[bool] = None
+    launch_status: Optional[str] = None
     linkedin_handle: Optional[str] = None
-    luma_plus_active: bool
+    luma_plus_active: Optional[bool] = None
     meta_pixel_id: Optional[Any] = None
-    name: str
+    name: Optional[str] = None
     personal_user_api_id: Optional[str] = None
     refund_policy: Optional[RefundPolicy] = None
     show_subscriber_count: Optional[bool] = None
-    slug: str
-    social_image_url: str
+    slug: Optional[str] = None
+    social_image_url: Optional[str] = None
     stripe_account_id: Optional[str] = None
     tax_config: Optional[Any] = None
     tiktok_handle: Optional[str] = None
-    timezone: str
-    tint_color: str
-    track_meta_ads_from_luma: bool
+    timezone: Optional[str] = None
+    tint_color: Optional[str] = None
+    track_meta_ads_from_luma: Optional[bool] = None
     twitter_handle: Optional[str] = None
     verified_at: Optional[str] = None
     website: Optional[str] = None
     youtube_handle: Optional[str] = None
-    is_personal: bool
+    is_personal: Optional[bool] = None
 
 
 class VirtualInfo(BaseModel):

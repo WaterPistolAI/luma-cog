@@ -2816,11 +2816,9 @@ class Luma(commands.Cog):
         `[p]luma next` - Quick view of next update time
         """
         # Get current configuration
-        global_config = await self.config.all()
-        guild_config = await self.config.guild(ctx.guild).all()
-        update_interval_hours = global_config["update_interval_hours"]
-        last_update_str = global_config["last_update"]
-        updates_enabled = guild_config["enabled"]
+        update_interval_hours = await self.config.update_interval_hours()
+        last_update_str = await self.config.last_update()
+        updates_enabled = await self.config.guild(ctx.guild).enabled()
 
         # Calculate next update time
         now = datetime.now(timezone.utc)
