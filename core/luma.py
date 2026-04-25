@@ -976,7 +976,7 @@ class Luma(commands.Cog):
                 url = f"https://lu.ma/{subscription.slug}"
                 embed.add_field(
                     name=subscription.name,
-                    value=f"[{url}]({url})",
+                    value=f"[lu.ma/{subscription.slug}]({url})",
                     inline=False,
                 )
 
