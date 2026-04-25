@@ -4,6 +4,7 @@ import asyncio
 import aiohttp
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger("red.luma.google")
 
@@ -90,7 +91,6 @@ class GoogleCalendarClient:
             return []
 
     def _event_to_google(self, event) -> Dict[str, Any]:
-        """Convert a Luma Event to a Google Calendar event body."""
         start_at = datetime.fromisoformat(event.start_at.replace("Z", "+00:00"))
         end_at_str = event.end_at
         if end_at_str:
@@ -99,15 +99,19 @@ class GoogleCalendarClient:
             end_at = start_at
 
         tz = event.timezone or "UTC"
+        tz_info = ZoneInfo(tz)
+
+        local_start = start_at.astimezone(tz_info)
+        local_end = end_at.astimezone(tz_info)
 
         google_event = {
             'summary': event.name,
             'start': {
-                'dateTime': start_at.strftime('%Y-%m-%dT%H:%M:%S'),
+                'dateTime': local_start.strftime('%Y-%m-%dT%H:%M:%S'),
                 'timeZone': tz,
             },
             'end': {
-                'dateTime': end_at.strftime('%Y-%m-%dT%H:%M:%S'),
+                'dateTime': local_end.strftime('%Y-%m-%dT%H:%M:%S'),
                 'timeZone': tz,
             },
             'source': {
