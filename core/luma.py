@@ -876,6 +876,38 @@ class Luma(commands.Cog):
             )
             await ctx.send(embed=embed)
 
+    @luma_group.command(name="calendar", aliases=["cal"])
+    async def calendar_links(self, ctx: commands.Context):
+        """Show shareable Luma calendar links for all subscriptions.
+
+        Example:
+        `[p]luma calendar`
+        """
+        subscriptions = await self.config.guild(ctx.guild).subscriptions()
+
+        if not subscriptions:
+            await ctx.send(
+                "No subscriptions configured. Use `[p]luma subscriptions add` to add one."
+            )
+            return
+
+        embed = discord.Embed(
+            title="📅 Luma Calendars",
+            color=discord.Color.blue(),
+        )
+
+        for sub_id, sub_data in subscriptions.items():
+            subscription = Subscription.from_dict(sub_data)
+            if subscription.slug:
+                url = f"https://lu.ma/{subscription.slug}"
+                embed.add_field(
+                    name=subscription.name,
+                    value=f"[{url}]({url})",
+                    inline=False,
+                )
+
+        await ctx.send(embed=embed)
+
     @luma_group.group(name="subscriptions", aliases=["subs"])
     async def subscriptions_group(self, ctx: commands.Context):
         """Manage Luma calendar subscriptions.
