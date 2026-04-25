@@ -834,9 +834,13 @@ class Luma(commands.Cog):
         description += f"\n🔗 [View Event]({event_url})"
 
         embed.description = description
+        embed.url = event_url
         embed.set_footer(text=f"From: {group_name}")
 
-        message = await channel.send(content=event_url, embed=embed)
+        if event.cover_url:
+            embed.set_thumbnail(url=event.cover_url)
+
+        message = await channel.send(embed=embed)
 
         # Track the message for cleanup after event expires
         if guild_id and message:
