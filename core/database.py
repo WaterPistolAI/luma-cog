@@ -2,7 +2,7 @@ import sqlite3
 import logging
 import asyncio
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Set
 from pathlib import Path
 
 log = logging.getLogger("red.luma.database")
@@ -145,6 +145,13 @@ class EventDatabase:
                     """
                     CREATE INDEX IF NOT EXISTS idx_event_history_guild 
                     ON event_history(guild_id, channel_id)
+                """
+                )
+
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_event_history_event_guild
+                    ON event_history(event_api_id, guild_id)
                 """
                 )
 
@@ -361,25 +368,21 @@ class EventDatabase:
     async def was_event_recently_sent(
         self, event_api_id: str, guild_id: int, hours: int = 24
     ) -> bool:
-        """Check if an event was sent to this guild within the specified hours."""
         async with self._lock:
             try:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
 
-                    cutoff_time = datetime.now(timezone.utc).isoformat()
-                    hours_ago = (
-                        datetime.now(timezone.utc)
-                        .replace(hour=datetime.now(timezone.utc).hour - hours)
-                        .isoformat()
-                    )
+                    cutoff = (
+                        datetime.now(timezone.utc) - timedelta(hours=hours)
+                    ).isoformat()
 
                     cursor.execute(
                         """
                         SELECT COUNT(*) FROM event_history 
                         WHERE event_api_id = ? AND guild_id = ? AND sent_at >= ?
                     """,
-                        (event_api_id, guild_id, hours_ago),
+                        (event_api_id, guild_id, cutoff),
                     )
 
                     count = cursor.fetchone()[0]
@@ -388,6 +391,32 @@ class EventDatabase:
             except Exception as e:
                 log.error(f"Failed to check recent event send: {e}")
                 return False
+
+    async def get_sent_event_ids_for_guild(
+        self, guild_id: int, hours: int = 48
+    ) -> Set[str]:
+        async with self._lock:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+
+                    cutoff = (
+                        datetime.now(timezone.utc) - timedelta(hours=hours)
+                    ).isoformat()
+
+                    cursor.execute(
+                        """
+                        SELECT DISTINCT event_api_id FROM event_history
+                        WHERE guild_id = ? AND sent_at >= ?
+                    """,
+                        (guild_id, cutoff),
+                    )
+
+                    return {row[0] for row in cursor.fetchall()}
+
+            except Exception as e:
+                log.error(f"Failed to get sent event IDs for guild {guild_id}: {e}")
+                return set()
 
     async def get_expired_messages(self, hours_after_event: int = 2) -> List[Dict[str, Any]]:
         """Get messages for events that have already passed.

@@ -452,7 +452,8 @@ class Luma(commands.Cog):
                     f"(detected {result['new_events_count']} new events)"
                 )
                 await self.send_events_to_channel(
-                    group.channel_id, result["events"], guild, group_name
+                    group.channel_id, result["events"], guild, group_name,
+                    skip_already_sent=True,
                 )
                 messages_sent += len(result["events"])
             else:
@@ -700,10 +701,15 @@ class Luma(commands.Cog):
         events: List[Event],
         guild: discord.Guild,
         group_name: str,
+        skip_already_sent: bool = False,
     ):
         """Send individual event messages to a Discord channel.
 
         Each new event is sent as its own message/embed for better visibility.
+
+        Args:
+            skip_already_sent: If True, skip events already sent to any channel
+                              in this guild (prevents cross-group duplicates).
         """
         try:
             channel = guild.get_channel(channel_id)
@@ -714,6 +720,25 @@ class Luma(commands.Cog):
             if not events:
                 return
 
+            # Filter out events already sent to this guild to prevent cross-group duplicates
+            if skip_already_sent:
+                sent_event_ids = await self.event_db.get_sent_event_ids_for_guild(guild.id)
+                events_to_send = [e for e in events if e.api_id not in sent_event_ids]
+                skipped = len(events) - len(events_to_send)
+                if skipped > 0:
+                    log.info(
+                        f"Skipping {skipped} events already sent to guild {guild.id} "
+                        f"in group '{group_name}'"
+                    )
+                if not events_to_send:
+                    log.info(
+                        f"All {len(events)} events already sent to guild {guild.id}, "
+                        f"skipping group '{group_name}'"
+                    )
+                    return
+            else:
+                events_to_send = events
+
             # Get subscriptions for building clickable links
             subscriptions = await self.config.guild(guild).subscriptions()
 
@@ -723,7 +748,7 @@ class Luma(commands.Cog):
                 return
 
             # Send each event as an individual message
-            for event in events[:10]:  # Limit to 10 events per update
+            for event in events_to_send[:10]:  # Limit to 10 events per update
                 try:
                     message = await self._send_single_event_embed(
                         channel, event, subscriptions, group_name, guild.id
@@ -735,7 +760,7 @@ class Luma(commands.Cog):
                     continue
 
             log.info(
-                f"Sent {min(len(events), 10)} individual event messages to channel {channel_id}"
+                f"Sent {min(len(events_to_send), 10)} individual event messages to channel {channel_id}"
             )
 
         except Exception as e:
@@ -2588,6 +2613,7 @@ class Luma(commands.Cog):
                                 result["events"],
                                 ctx.guild,
                                 group_name,
+                                skip_already_sent=True,
                             )
                             total_events_sent += result["new_events_count"]
 
