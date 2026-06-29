@@ -91,6 +91,9 @@ class GoogleCalendarClient:
             return []
 
     def _event_to_google(self, event) -> Dict[str, Any]:
+        if not event.start_at:
+            raise ValueError(f"Event {event.name} has no start_at")
+
         start_at = datetime.fromisoformat(event.start_at.replace("Z", "+00:00"))
         end_at_str = event.end_at
         if end_at_str:

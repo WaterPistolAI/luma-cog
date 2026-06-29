@@ -523,6 +523,9 @@ class Luma(commands.Cog):
             f"{len(all_new_events)} total new events, seen_api_ids: {len(seen_api_ids)}"
         )
 
+        # Filter out events without required time data before sorting
+        all_events = [e for e in all_events if e.start_at]
+        
         # Sort events by start time and limit to recent events
         all_events.sort(key=lambda x: x.start_at)
         cutoff_date = datetime.now(timezone.utc) - timedelta(
@@ -590,6 +593,8 @@ class Luma(commands.Cog):
                 # Convert events to dict format for database operations
                 event_dicts = []
                 for event in events:
+                    if not event.api_id or not event.start_at or not event.name:
+                        continue
                     event_dict = {
                         "api_id": event.api_id,
                         "calendar_api_id": subscription.api_id,
@@ -749,6 +754,10 @@ class Luma(commands.Cog):
 
         Returns the sent message object for tracking.
         """
+        if not event.start_at:
+            log.warning(f"Skipping event with no start_at: {event.name}")
+            return None
+
         start_time = datetime.fromisoformat(event.start_at.replace("Z", "+00:00"))
 
         # Format date/time nicely
@@ -1116,7 +1125,8 @@ class Luma(commands.Cog):
                         now = datetime.now(timezone.utc)
                         upcoming = [
                             e for e in new_events
-                            if datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
+                            if e.start_at and e.api_id and e.name
+                            and datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
                         ]
 
                         if upcoming:
@@ -1581,6 +1591,8 @@ class Luma(commands.Cog):
                             limit=100,
                         )
                         for event in events:
+                            if not event.api_id or not event.start_at or not event.name:
+                                continue
                             if event.api_id not in seen_api_ids:
                                 all_events.append(event)
                                 seen_api_ids.add(event.api_id)
@@ -1591,7 +1603,7 @@ class Luma(commands.Cog):
             now = datetime.now(timezone.utc)
             upcoming = [
                 e for e in all_events
-                if datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
+                if e.start_at and datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
             ]
             upcoming.sort(key=lambda x: x.start_at)
 
@@ -1747,6 +1759,8 @@ class Luma(commands.Cog):
                                 calendar_identifier=subscription.api_id, limit=100,
                             )
                             for event in events:
+                                if not event.api_id or not event.start_at or not event.name:
+                                    continue
                                 if event.api_id not in seen_api_ids:
                                     all_events.append(event)
                                     seen_api_ids.add(event.api_id)
@@ -1756,7 +1770,7 @@ class Luma(commands.Cog):
                 now = datetime.now(timezone.utc)
                 upcoming = [
                     e for e in all_events
-                    if datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
+                    if e.start_at and datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
                 ]
                 upcoming.sort(key=lambda x: x.start_at)
 
@@ -2755,6 +2769,8 @@ class Luma(commands.Cog):
 
                 # Show first few events
                 for i, event in enumerate(result["events"][:3]):
+                    if not event.start_at or not event.name:
+                        continue
                     start_time = datetime.fromisoformat(
                         event.start_at.replace("Z", "+00:00")
                     )
