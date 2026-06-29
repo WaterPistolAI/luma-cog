@@ -886,7 +886,7 @@ class Luma(commands.Cog):
             await ctx.send(embed=embed)
 
     @luma_group.command(name="calendar", aliases=["cal"])
-    async def calendar_links(self, ctx: commands.Context, view: Optional[str] = "week"):
+    async def calendar_links(self, ctx: commands.Context, view: Optional[str] = "week", offset: int = 0):
         """Show the aggregate Google Calendar with a screenshot preview.
 
         Renders the aggregate Google Calendar as a screenshot (requires playwright).
@@ -896,10 +896,14 @@ class Luma(commands.Cog):
 
         Parameters:
         <view> - Calendar view: 'week' (default) or 'month'
+        <offset> - Number of weeks/months to offset (positive = forward, negative = back)
 
         Examples:
-        `[p]luma calendar` - Week view
-        `[p]luma calendar month` - Month view
+        `[p]luma calendar` - Current week view
+        `[p]luma calendar month` - Current month view
+        `[p]luma calendar week 1` - Next week
+        `[p]luma calendar month -1` - Previous month
+        `[p]luma calendar 2` - 2 weeks from now
         """
         aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
 
@@ -910,37 +914,61 @@ class Luma(commands.Cog):
             return
 
         cal_id = aggregate_config["calendar_id"]
-        gcal_mode = "WEEK" if view.lower() != "month" else "MONTH"
+        is_month = view.lower() == "month"
+        gcal_mode = "MONTH" if is_month else "WEEK"
+
+        from datetime import timedelta
+
+        today = datetime.now(timezone.utc)
+        if is_month:
+            start = (today.replace(day=1) + timedelta(days=32 * offset)).replace(day=1)
+            if start.month == 12:
+                end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                end = start.replace(month=start.month + 1, day=1) - timedelta(days=1)
+        else:
+            weekday = today.weekday()
+            start = today - timedelta(days=weekday) + timedelta(weeks=offset)
+            end = start + timedelta(days=6)
+
+        dates_param = f"{start.strftime('%Y%m%d')}/{end.strftime('%Y%m%d')}"
+
         gcal_embed_url = (
             f"https://calendar.google.com/calendar/embed?"
             f"src={urllib.parse.quote(cal_id, safe='')}"
             f"&ctz=America%2FNew_York"
             f"&mode={gcal_mode}"
+            f"&dates={dates_param}"
         )
         gcal_web_url = f"https://calendar.google.com/calendar/u/0/r?cid={urllib.parse.quote(cal_id, safe='')}"
 
+        offset_label = ""
+        if offset != 0:
+            direction = "ahead" if offset > 0 else "back"
+            unit = "month" if is_month else "week"
+            offset_label = f" — {abs(offset)} {unit}{'s' if abs(offset) > 1 else ''} {direction}"
+
         embed = discord.Embed(
-            title=f"📆 Calendar ({view.capitalize()} View)",
+            title=f"📆 Calendar ({view.capitalize()} View{offset_label})",
             color=discord.Color.blue(),
         )
         embed.add_field(
-            name="Links",
+            name=f"{start.strftime('%b %d')} — {end.strftime('%b %d, %Y')}",
             value=f"[View in browser]({gcal_embed_url})\n[Open in Google Calendar]({gcal_web_url})",
             inline=False,
         )
 
-        if gcal_embed_url:
-            try:
-                screenshot_path = await self._render_calendar_screenshot(gcal_embed_url)
-                if screenshot_path:
-                    await ctx.send(embed=embed, file=discord.File(screenshot_path))
-                    import os
-                    os.remove(screenshot_path)
-                    return
-            except ImportError:
-                pass
-            except Exception as e:
-                log.warning(f"Calendar screenshot failed: {e}")
+        try:
+            screenshot_path = await self._render_calendar_screenshot(gcal_embed_url)
+            if screenshot_path:
+                await ctx.send(embed=embed, file=discord.File(screenshot_path))
+                import os
+                os.remove(screenshot_path)
+                return
+        except ImportError:
+            pass
+        except Exception as e:
+            log.warning(f"Calendar screenshot failed: {e}")
 
         await ctx.send(embed=embed)
 
@@ -950,9 +978,60 @@ class Luma(commands.Cog):
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page(viewport={"width": 1600, "height": 900})
+            page = await browser.new_page(viewport={"width": 1600, "height": 1100})
             await page.goto(url, wait_until="networkidle", timeout=15000)
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(3000)
+
+            # Inject JavaScript to crop the view to show 8am-10pm only
+            result = await page.evaluate("""() => {
+                // Find all elements that scroll (have content taller than their box)
+                const scrollables = Array.from(document.querySelectorAll('*'))
+                    .filter(el => el.scrollHeight > el.clientHeight + 50);
+
+                if (scrollables.length === 0) {
+                    return { success: false, error: 'No scrollable container found' };
+                }
+
+                // Use the first scrollable container (should be the calendar grid)
+                const scrollContainer = scrollables[0];
+
+                // The calendar typically shows 48 half-hour slots or 24 full hours
+                // Calculate height per hour based on total scrollable content
+                const totalHeight = scrollContainer.scrollHeight;
+                const hourHeight = totalHeight / 24;
+
+                // Scroll to 8am (hour 8 from top)
+                const targetScroll = 8 * hourHeight;
+                scrollContainer.scrollTop = targetScroll;
+
+                // Clip to only show 14 hours: 8am (hour 8) through 10pm (hour 22)
+                const visibleHours = 14;
+                const visibleHeight = visibleHours * hourHeight;
+                scrollContainer.style.height = visibleHeight + 'px';
+                scrollContainer.style.maxHeight = visibleHeight + 'px';
+                scrollContainer.style.overflowY = 'hidden';
+
+                // Also try to hide any header/navigation that sits above the grid
+                const header = document.querySelector('[role="heading"]');
+                if (header && header.parentElement) {
+                    header.parentElement.style.display = 'none';
+                }
+
+                return {
+                    success: true,
+                    hourHeight: hourHeight,
+                    totalHeight: totalHeight,
+                    scrolledTo: targetScroll,
+                    visibleHeight: visibleHeight
+                };
+            }""")
+
+            if not result.get("success"):
+                log.debug(f"Calendar crop failed: {result.get('error')}")
+
+            # Resize viewport to match the cropped calendar height
+            await page.wait_for_timeout(500)
+            
             tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
             tmp.close()
             await page.screenshot(path=tmp.name, full_page=False)
@@ -1633,7 +1712,7 @@ class Luma(commands.Cog):
             )
             embed.add_field(
                 name="Total Events",
-                value=f"{len(upcoming)} upcoming events across {len(subscriptions)} calendars",
+                value=f"{len(upcoming)} upcoming events across {len(subscriptions)} subscriptions",
                 inline=True,
             )
             embed.add_field(
