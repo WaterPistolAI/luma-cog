@@ -462,10 +462,86 @@ class Luma(commands.Cog):
                     f"new_events_count={result['new_events_count']}"
                 )
 
+        # Auto-sync to aggregate Google Calendar if configured
+        await self._auto_sync_aggregate_calendar(guild, subscriptions)
+
         log.info(
             f"[DEBUG] update_guild_events complete for guild {guild.id}: "
             f"Messages Sent: {messages_sent}"
         )
+
+    async def _auto_sync_aggregate_calendar(
+        self, guild: discord.Guild, subscriptions: Dict
+    ):
+        """Sync events from all subscriptions to the aggregate Google Calendar.
+
+        Runs silently during the periodic update loop. Only syncs if both
+        Google credentials and an aggregate calendar are configured.
+        """
+        creds = await self.config.google_credentials()
+        aggregate_config = await self.config.guild(guild).aggregate_calendar()
+
+        if not creds or not aggregate_config or not aggregate_config.get("calendar_id"):
+            return
+
+        if not subscriptions:
+            return
+
+        try:
+            from .google_calendar import GoogleCalendarClient
+
+            client = GoogleCalendarClient(creds)
+            cal_id = aggregate_config["calendar_id"]
+            existing_mapping = await self.config.guild(guild).google_event_mapping()
+
+            all_events = []
+            seen_api_ids = set()
+
+            async with LumaAPIClient() as api_client:
+                for sub_id, sub_data in subscriptions.items():
+                    subscription = Subscription.from_dict(sub_data)
+                    try:
+                        events = await api_client.get_calendar_events(
+                            calendar_identifier=subscription.api_id, limit=100,
+                        )
+                        for event in events:
+                            if not event.api_id or not event.start_at or not event.name:
+                                continue
+                            if event.api_id not in seen_api_ids:
+                                all_events.append(event)
+                                seen_api_ids.add(event.api_id)
+                    except Exception as e:
+                        log.warning(f"[auto-sync] Failed to fetch {subscription.name}: {e}")
+
+            now = datetime.now(timezone.utc)
+            upcoming = [
+                e for e in all_events
+                if e.start_at and datetime.fromisoformat(e.start_at.replace("Z", "+00:00")) >= now
+            ]
+            upcoming.sort(key=lambda x: x.start_at)
+
+            if not upcoming:
+                return
+
+            sync_result = await client.sync_events(
+                calendar_id=cal_id,
+                events=upcoming,
+                existing_mapping=existing_mapping or {},
+            )
+
+            await self.config.guild(guild).google_event_mapping.set(sync_result["mapping"])
+
+            stats = sync_result["stats"]
+            log.info(
+                f"[auto-sync] Guild {guild.id} aggregate calendar: "
+                f"{stats['created']} created, {stats['updated']} updated, "
+                f"{stats['failed']} failed out of {len(upcoming)} events"
+            )
+
+        except ImportError:
+            pass
+        except Exception as e:
+            log.warning(f"[auto-sync] Error syncing aggregate calendar for guild {guild.id}: {e}")
 
     async def fetch_events_for_group(
         self, group: ChannelGroup, subscriptions: Dict, check_for_changes: bool = True
