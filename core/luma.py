@@ -1696,6 +1696,30 @@ class Luma(commands.Cog):
                     inline=True,
                 )
 
+                # Check write access to the target calendar if one is configured
+                aggregate_config = await self.config.guild(ctx.guild).aggregate_calendar()
+                if aggregate_config and aggregate_config.get("calendar_id"):
+                    cal_id = aggregate_config["calendar_id"]
+                    write_check = await client.check_calendar_write_access(cal_id)
+                    if write_check.get("can_write"):
+                        embed.add_field(
+                            name="Write Access",
+                            value=f"✅ Yes — `{write_check['access_role']}` on **{write_check.get('summary', cal_id)}**",
+                            inline=False,
+                        )
+                    else:
+                        embed.color = discord.Color.orange()
+                        embed.title = "⚠️ Google Calendar — Read Only"
+                        embed.add_field(
+                            name="Write Access",
+                            value=f"❌ No — `{write_check.get('access_role', 'none')}` on **{write_check.get('summary', cal_id)}**\n\n"
+                                f"**To fix:** Go to [calendar.google.com](https://calendar.google.com) → Settings → "
+                                f"Share with specific people → Add:\n"
+                                f"`{result.get('service_account', 'Unknown')}`\n"
+                                f"With permission: **Make changes to events**",
+                            inline=False,
+                        )
+
                 await ctx.send(embed=embed)
             else:
                 await ctx.send(f"❌ Connection failed: {result.get('error')}")

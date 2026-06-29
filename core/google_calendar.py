@@ -17,8 +17,7 @@ class GoogleCalendarClient:
     """
 
     SCOPES = [
-        'https://www.googleapis.com/auth/calendar.events',
-        'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+        'https://www.googleapis.com/auth/calendar',
     ]
 
     def __init__(self, credentials_data: Optional[Dict] = None):
@@ -66,9 +65,10 @@ class GoogleCalendarClient:
         try:
             service = await self._get_service()
             result = service.calendarList().list(maxResults=1).execute()
+            client_email = self.credentials_data.get('client_email') if self.credentials_data else 'env'
             return {
                 'success': True,
-                'service_account': self.credentials_data.get('client_email') if self.credentials_data else 'env',
+                'service_account': client_email,
                 'calendars_accessible': len(result.get('items', [])),
             }
         except Exception as e:
@@ -89,6 +89,53 @@ class GoogleCalendarClient:
         except Exception as e:
             log.error(f"Error listing calendars: {e}")
             return []
+
+    async def check_calendar_write_access(self, calendar_id: str) -> Dict[str, Any]:
+        try:
+            service = await self._get_service()
+            # Try direct calendar GET - works even if not in calendarList
+            try:
+                cal = service.calendars().get(calendarId=calendar_id).execute()
+                can_write = True  # If we can fetch it directly, we have at least read access
+                # Try a test write to verify write permission
+                try:
+                    test_body = {
+                        'summary': '__luma_access_test__',
+                        'start': {'dateTime': '2099-01-01T00:00:00', 'timeZone': 'UTC'},
+                        'end': {'dateTime': '2099-01-01T01:00:00', 'timeZone': 'UTC'},
+                    }
+                    test_event = service.events().insert(
+                        calendarId=calendar_id, body=test_body
+                    ).execute()
+                    # Clean up the test event immediately
+                    service.events().delete(
+                        calendarId=calendar_id, eventId=test_event['id']
+                    ).execute()
+                    access_role = 'writer'
+                except Exception:
+                    access_role = 'reader'
+                    can_write = False
+
+                return {
+                    'calendar_id': calendar_id,
+                    'summary': cal.get('summary', 'Unknown'),
+                    'access_role': access_role,
+                    'can_write': can_write,
+                }
+            except Exception as e:
+                return {
+                    'calendar_id': calendar_id,
+                    'access_role': 'none',
+                    'can_write': False,
+                    'error': str(e),
+                }
+        except Exception as e:
+            return {
+                'calendar_id': calendar_id,
+                'access_role': 'none',
+                'can_write': False,
+                'error': str(e),
+            }
 
     def _event_to_google(self, event) -> Dict[str, Any]:
         if not event.start_at:
